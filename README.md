@@ -1,9 +1,5 @@
 # <img src="https://matterbridge.io/assets/matterbridge.svg" alt="Matterbridge Logo" width="64px" height="64px">&nbsp;&nbsp;&nbsp;Matterbridge Reolink
 
-[![npm version](https://img.shields.io/npm/v/matterbridge.svg)](https://www.npmjs.com/package/matterbridge)
-[![npm downloads](https://img.shields.io/npm/dt/matterbridge.svg)](https://www.npmjs.com/package/matterbridge)
-[![Docker Version](https://img.shields.io/docker/v/luligu/matterbridge/latest?label=docker%20version)](https://hub.docker.com/r/luligu/matterbridge)
-[![Docker Pulls](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/Luligu/b21088ab9c9f2b119b42c33f0fef218d/raw/docker.json)](https://hub.docker.com/r/luligu/matterbridge)
 ![Node.js CI](https://github.com/RyanMorash/matterbridge-reolink/actions/workflows/build.yml/badge.svg)
 ![CodeQL](https://github.com/RyanMorash/matterbridge-reolink/actions/workflows/codeql.yml/badge.svg)
 [![codecov](https://codecov.io/gh/RyanMorash/matterbridge-reolink/branch/main/graph/badge.svg)](https://codecov.io/gh/RyanMorash/matterbridge-reolink)
@@ -16,9 +12,6 @@
 [![matterbridge.io](https://img.shields.io/badge/matterbridge.io-online-brightgreen)](https://matterbridge.io)
 
 [![powered by](https://img.shields.io/badge/powered%20by-matterbridge-blue)](https://www.npmjs.com/package/matterbridge)
-[![powered by](https://img.shields.io/badge/powered%20by-matter--history-blue)](https://www.npmjs.com/package/matter-history)
-[![powered by](https://img.shields.io/badge/powered%20by-node--ansi--logger-blue)](https://www.npmjs.com/package/node-ansi-logger)
-[![powered by](https://img.shields.io/badge/powered%20by-node--persist--manager-blue)](https://www.npmjs.com/package/node-persist-manager)
 
 This plugin exposes Reolink cameras, doorbells, and NVR or Home Hub channels to Matter through [Matterbridge](https://github.com/Luligu/matterbridge). It talks to each device with [@apocaliss92/nodelink-js](https://github.com/apocaliss92/nodelink-js) on the Baichuan port (9000). Live view and snapshots stay on Matterbridge’s ffmpeg and WebRTC path. The plugin publishes a localhost RTSP proxy for each channel and does not spawn ffmpeg itself.
 
@@ -45,87 +38,6 @@ Platform fields are `whiteList`, `blackList`, `debug`, `unregisterOnShutdown`, `
 
 ffmpeg must be on `PATH`. Matterbridge shells out to it for WebRTC and snapshots. When email or webhook push is enabled, the camera must be able to reach the bridge. Leave `configurePush` off unless you want the plugin to change the camera’s SMTP or webhook URL. Passwords stay in the plugin config and are not written to the log. A failed login is logged and skipped; the other devices still start.
 
-## Available workflows
-
-The project has the following already configured workflows:
-
-- **build.yml**: run on push and pull request and build, lint and test the plugin on node 22, 24 and 26 with ubuntu, macOS and windows.
-- **publish.yml**: publish on npm under tag latest when you create a new release in GitHub and publish under tag dev on npm from main (or dev if it exist) branch every day at midnight UTC if there is a new commit. The workflow has been updated for trusted publishing / OIDC, so you need to setup the package npm settings to allow it (i.e. authorize publish.yml).
-- **codeql.yml**: run CodeQL on the main and dev branches on each push and pull request.
-- **codecov.yml**: run CodeCov on the main and dev branches on each push and pull request. You need a codecov account and to add your CODECOV_TOKEN to the repository secrets.
-- **chip-tests.yml**: run the CHIP conformance test suite on ubuntu every monday at 03:00 UTC and on demand (workflow_dispatch). See [chipTests.md](./chipTests.md) and the `chip:start`, `chip:test` and `chip:stop` scripts.
-
-## Using the Dev Container
-
-- Docker Desktop or Docker Engine are required to use the Dev Container.
-- Devcontainer works correctly on Linux, macOS, Windows, WSL2.
-- Two runtime variants are available, `.devcontainer/node` and `.devcontainer/bun`: choose one when you reopen in the container. See [.devcontainer/README.md](./.devcontainer/README.md) for the lifecycle scripts, volumes and host setup.
-- The devcontainer provides Node.js (or Bun), npm, TypeScript Native (tsgo), oxlint, oxfmt, Vitest and other tools and extensions pre-installed and configured.
-- The dev branch of Matterbridge is already build and installed into the Dev Container and linked to the plugin. The plugin is automatically added to matterbridge.
-- The devcontainer is optimized using named mounts for node_modules, .cache and matterbridge.
-- You can run, build, and test your plugin directly inside the container.
-- To open a terminal in the devcontainer, use the VS Code terminal after the container starts.
-- All commands (npm, tsc, matterbridge etc.) will run inside the container environment.
-- All the source files are on the host.
-
-## Dev containers networking limitations
-
-Dev containers have networking limitations depending on the host OS and Docker setup.
-
-• Docker Desktop on Windows or macOS:
-
-- Runs inside a VM
-- Host networking mode is NOT available
-- Use the Matterbridge Plugin Dev Container system (https://matterbridge.io/reflector/MatterbridgeDevContainer.html) for development and testing. It provides a similar environment to the native Linux setup with the following features:
-
-  ✅ Is possible to pair with an Home Assistant instance running in docker compose on the same host
-
-  ✅ mDNS works normally inside the containers
-
-  ✅ Remote and local network access (cloud services, internet APIs) work normally
-
-  ✅ Matterbridge and plugins work normally
-
-  ✅ Matterbridge frontend works normally
-
-- Use the Matterbridge mDNS Reflector with the Matterbridge Plugin Dev Container system (https://matterbridge.io/reflector/Reflector.html) if you want to pair with a controller on the local network with the following features:
-
-  ✅ Is possible to pair with a controller running on the local network using mDNS reflector
-
-  ✅ mDNS, remote and local network access (cloud services, internet APIs) work normally
-
-  ✅ Matterbridge and plugins work normally
-
-  ✅ Matterbridge frontend works normally
-
-• Native Linux or WSL 2 with Docker Engine CLI integration:
-
-- ✅ Host networking IS available (with --network=host)
-
-- ✅ Full local network access is supported
-
-- ✅ Matterbridge and plugins work correctly, including pairing
-
-- ✅ Matterbridge frontend works normally
-
-## Development guide
-
-Refer to the Matterbridge [Development guide](https://matterbridge.io/README-DEV.html) for other guidelines.
-
-## Repository toolchain
-
-See [TOOLCHAIN.md](./TOOLCHAIN.md) for compilers, linting, formatting, testing, and editor support.
-
-## Shared agent instructions
-
-See [SHARED-AGENTS.md](./SHARED-AGENTS.md) for shared guidance, rules, skills, and configuration for coding agents.
-
-See [.agents/README.md](./.agents/README.md) for the shared instructions layout and versioning.
-
-## Shared dev container support
-
-See [.devcontainer/README.md](./.devcontainer/README.md) for the shared development container setup and usage.
-
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for contribution guidelines.
@@ -145,7 +57,3 @@ Report bugs and suggest improvements on [GitHub Issues](https://github.com/RyanM
 ## License
 
 Licensed under the [Apache License 2.0](./LICENSE).
-
-## Support the project
-
-If you find this project useful, please consider giving it a star on [GitHub](https://github.com/RyanMorash/matterbridge-reolink).
