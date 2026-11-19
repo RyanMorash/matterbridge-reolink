@@ -1,0 +1,16 @@
+{
+  "name": "matterbridge-reolink",
+  "type": "DynamicPlatform",
+  "whiteList": [],
+  "blackList": [],
+  "debug": false,
+  "unregisterOnShutdown": false,
+  "devices": [],
+  "eventHoldSeconds": 30,
+  "batteryPollSeconds": 300,
+  "push": "none",
+  "configurePush": false,
+  "emailPushPort": 2525,
+  "webhookPort": 9081,
+  "emailPushDomain": "reolink.local"
+}

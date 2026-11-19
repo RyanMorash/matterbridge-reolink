@@ -1,0 +1,170 @@
+{
+  "title": "Matterbridge Reolink",
+  "description": "matterbridge-reolink v. 1.0.0",
+  "type": "object",
+  "properties": {
+    "name": {
+      "title": "Plugin Name",
+      "description": "Plugin name",
+      "type": "string",
+      "readOnly": true,
+      "ui:widget": "hidden"
+    },
+    "type": {
+      "title": "Plugin Type",
+      "description": "Plugin type",
+      "type": "string",
+      "readOnly": true,
+      "ui:widget": "hidden"
+    },
+    "whiteList": {
+      "title": "White List",
+      "description": "Only the devices in the list will be exposed. If the list is empty, all the devices will be exposed.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "selectFrom": "name"
+    },
+    "blackList": {
+      "title": "Black List",
+      "description": "The devices in the list will not be exposed. If the list is empty, no devices will be excluded.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true,
+      "selectFrom": "name"
+    },
+    "debug": {
+      "title": "Enable Debug",
+      "description": "Enable debug mode for the plugin. Only for debugging purposes, not recommended for production use.",
+      "type": "boolean",
+      "default": false
+    },
+    "unregisterOnShutdown": {
+      "title": "Unregister On Shutdown",
+      "description": "Unregister all devices on shutdown. Only for debugging purposes, not recommended for production use.",
+      "type": "boolean",
+      "default": false
+    },
+    "devices": {
+      "title": "Cameras",
+      "description": "Reolink cameras, doorbells, and NVRs. Each entry is one Baichuan host.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["host", "username", "password"],
+        "properties": {
+          "host": {
+            "title": "Host",
+            "description": "Camera or NVR IP address or hostname.",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "description": "Baichuan login username.",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "description": "Baichuan login password. Stored in the plugin config and never written to the log.",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "description": "Optional name used for a single camera, or as a prefix for each NVR channel.",
+            "type": "string"
+          },
+          "port": {
+            "title": "Port",
+            "description": "Baichuan port. Default 9000.",
+            "type": "number",
+            "default": 9000,
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "uid": {
+            "title": "UID",
+            "description": "Reolink UID. Required for UDP battery cameras.",
+            "type": "string"
+          },
+          "transport": {
+            "title": "Transport",
+            "description": "Baichuan transport. Use udp for battery cameras.",
+            "type": "string",
+            "enum": ["tcp", "udp"],
+            "default": "tcp"
+          },
+          "channels": {
+            "title": "Channels",
+            "description": "NVR or Hub channel numbers to expose. Leave empty to expose every online channel.",
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "profile": {
+            "title": "Stream profile",
+            "description": "Baichuan stream proxied to Matter. sub is the default.",
+            "type": "string",
+            "enum": ["main", "sub", "ext"],
+            "default": "sub"
+          }
+        }
+      }
+    },
+    "eventHoldSeconds": {
+      "title": "Event hold seconds",
+      "description": "How long an occupancy sensor stays occupied after a detection. Range 1 to 300.",
+      "type": "number",
+      "default": 30,
+      "minimum": 1,
+      "maximum": 300
+    },
+    "batteryPollSeconds": {
+      "title": "Battery poll seconds",
+      "description": "How often battery cameras are polled. 0 disables polling. Pushed battery events are still applied.",
+      "type": "number",
+      "default": 300,
+      "minimum": 0,
+      "maximum": 86400
+    },
+    "push": {
+      "title": "Asleep event push",
+      "description": "Optional intake for battery cameras that cannot keep a Baichuan event socket open. none uses the native socket only.",
+      "type": "string",
+      "enum": ["none", "email", "webhook", "both"],
+      "default": "none"
+    },
+    "configurePush": {
+      "title": "Write push settings to the camera",
+      "description": "When enabled, the plugin writes the bridge address into the camera SMTP or HaCfg webhook settings. Leave disabled unless you want those camera settings changed.",
+      "type": "boolean",
+      "default": false
+    },
+    "emailPushPort": {
+      "title": "Email push port",
+      "description": "SMTP port for battery-camera email alerts.",
+      "type": "number",
+      "default": 2525,
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "webhookPort": {
+      "title": "Webhook port",
+      "description": "HTTP port for Baichuan HaCfg wake and sleep posts.",
+      "type": "number",
+      "default": 9081,
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "emailPushDomain": {
+      "title": "Email push domain",
+      "description": "Virtual domain used in the camera recipient address cam-<id>@domain.",
+      "type": "string",
+      "default": "reolink.local"
+    }
+  }
+}
