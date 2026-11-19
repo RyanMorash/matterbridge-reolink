@@ -1,12 +1,12 @@
-# <img src="https://matterbridge.io/assets/matterbridge.svg" alt="Matterbridge Logo" width="64px" height="64px">&nbsp;&nbsp;&nbsp;Matterbridge plugin template changelog
+# <img src="https://matterbridge.io/assets/matterbridge.svg" alt="Matterbridge Logo" width="64px" height="64px">&nbsp;&nbsp;&nbsp;Matterbridge Reolink changelog
 
 [![npm version](https://img.shields.io/npm/v/matterbridge.svg)](https://www.npmjs.com/package/matterbridge)
 [![npm downloads](https://img.shields.io/npm/dt/matterbridge.svg)](https://www.npmjs.com/package/matterbridge)
 [![Docker Version](https://img.shields.io/docker/v/luligu/matterbridge/latest?label=docker%20version)](https://hub.docker.com/r/luligu/matterbridge)
 [![Docker Pulls](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/Luligu/b21088ab9c9f2b119b42c33f0fef218d/raw/docker.json)](https://hub.docker.com/r/luligu/matterbridge)
-![Node.js CI](https://github.com/Luligu/matterbridge-plugin-template/actions/workflows/build.yml/badge.svg)
-![CodeQL](https://github.com/Luligu/matterbridge-plugin-template/actions/workflows/codeql.yml/badge.svg)
-[![codecov](https://codecov.io/gh/Luligu/matterbridge-plugin-template/branch/main/graph/badge.svg)](https://codecov.io/gh/Luligu/matterbridge-plugin-template)
+![Node.js CI](https://github.com/RyanMorash/matterbridge-reolink/actions/workflows/build.yml/badge.svg)
+![CodeQL](https://github.com/RyanMorash/matterbridge-reolink/actions/workflows/codeql.yml/badge.svg)
+[![codecov](https://codecov.io/gh/RyanMorash/matterbridge-reolink/branch/main/graph/badge.svg)](https://codecov.io/gh/RyanMorash/matterbridge-reolink)
 [![tested with Vitest](https://img.shields.io/badge/tested_with-Vitest-6E9F18.svg?logo=vitest&logoColor=white)](https://vitest.dev)
 [![styled with Oxc](https://img.shields.io/badge/styled_with-Oxc-9BE4E0.svg?logo=oxc&logoColor=white)](https://oxc.rs/docs/guide/usage/formatter.html)
 [![linted with Oxc](https://img.shields.io/badge/linted_with-Oxc-9BE4E0.svg?logo=oxc&logoColor=white)](https://oxc.rs/docs/guide/usage/linter.html)
@@ -25,15 +25,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-If you like this project and find it useful, please consider giving it a star on [GitHub](https://github.com/Luligu/matterbridge-plugin-template) and sponsoring it.
-
-<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="120"></a>
+If you like this project, please consider giving it a star on [GitHub](https://github.com/RyanMorash/matterbridge-reolink).
 
 ---
 
 > ## Periodical Updates
 >
 > Keeping your plugin repository aligned with the latest template is important for security, CI reliability, and developer experience. See the Periodical Updates section in the [README](README.md#periodical-updates) for guidance on what to periodically copy/update (e.g., `.devcontainer`, workflows, and tooling configs).
+
+## [1.0.0] - Dev branch
+
+This plugin started from the Matterbridge plugin template. The history below is that template.
+
+### Added
+
+- Reolink cameras, doorbells, floodlights, and NVR or Home Hub channels as Matter endpoints through `@apocaliss92/nodelink-js`.
+- Motion, person, vehicle, pet, and package occupancy sensors, a siren plug, battery reporting, and pan/tilt on a plain camera.
+- A localhost RTSP proxy per channel for Matterbridge WebRTC and snapshots. ffmpeg must be on `PATH`.
+- Optional email and webhook push for battery cameras that sleep, with `configurePush` left off unless the camera settings should be changed.
 
 ## [2.2.2] - Dev branch
 

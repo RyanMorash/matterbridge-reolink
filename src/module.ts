@@ -1,12 +1,12 @@
 /**
  * @file src/module.ts
- * @description This file contains the plugin template.
- * @author Luca Liguori
- * @created 2025-06-15
- * @version 2.0.0
+ * @description Matterbridge platform for Reolink cameras and doorbells.
+ * @author RyanMorash
+ * @created 2026-11-19
+ * @version 1.0.0
  * @license Apache-2.0
  *
- * Copyright 2025, 2026, 2027 Luca Liguori.
+ * Copyright 2026 RyanMorash.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,183 +21,202 @@
  * limitations under the License.
  */
 
-import { type BasePlatformConfig, MatterbridgeDynamicPlatform, MatterbridgeEndpoint, onOffPlugInUnit, type PlatformMatterbridge, thermostat } from 'matterbridge';
-import type { AnsiLogger, LogLevel } from 'matterbridge/logger';
-import type { ActionContext } from 'matterbridge/matter';
-import { OnOff, Thermostat } from 'matterbridge/matter/clusters';
+import path from 'node:path';
 
-// This allows to have type checking and autocompletion for the instance config.
-export type TemplatePlatformConfig = BasePlatformConfig & {
-  whiteList: string[];
-  blackList: string[];
-};
+import { ReolinkBaichuanApi } from '@apocaliss92/nodelink-js';
+import { MatterbridgeDynamicPlatform, type PlatformMatterbridge } from 'matterbridge';
+import type { AnsiLogger, LogLevel } from 'matterbridge/logger';
+
+import { normalizeConfig, type NormalizedConfig, type ReolinkPlatformConfig } from './config.js';
+import { type HostContext, HostSession } from './hostSession.js';
+import { createReolinkLogger, errorText } from './logger.js';
+import { loadOrCreatePushCredentials } from './pushCredentials.js';
+import { PushService } from './pushService.js';
+
+export type { ReolinkPlatformConfig } from './config.js';
 
 /**
- * This is the standard interface for Matterbridge plugins.
- * Each plugin should export a default function that follows this signature.
+ * Create the Reolink platform.
  *
- * @param {PlatformMatterbridge} matterbridge - An instance of MatterBridge.
- * @param {AnsiLogger} log - An instance of AnsiLogger. This is used for logging messages in a format that can be displayed with ANSI color codes and in the frontend.
- * @param {TemplatePlatformConfig} config - The platform configuration.
- * @returns {TemplatePlatform} - An instance of the MatterbridgeAccessory or MatterbridgeDynamicPlatform class. This is the main interface for interacting with the Matterbridge system.
+ * @param {PlatformMatterbridge} matterbridge Matterbridge host
+ * @param {AnsiLogger} log Platform logger
+ * @param {ReolinkPlatformConfig} config Plugin configuration
+ * @returns {ReolinkPlatform} Platform instance
  */
-export default function initializePlugin(matterbridge: PlatformMatterbridge, log: AnsiLogger, config: TemplatePlatformConfig): TemplatePlatform {
-  return new TemplatePlatform(matterbridge, log, config);
+export default function initializePlugin(matterbridge: PlatformMatterbridge, log: AnsiLogger, config: ReolinkPlatformConfig): ReolinkPlatform {
+  return new ReolinkPlatform(matterbridge, log, config);
 }
 
-// Here we define the TemplatePlatform class, which extends the MatterbridgeDynamicPlatform.
-// If you want to create an Accessory platform plugin, you should extend the MatterbridgeAccessoryPlatform class instead.
-export class TemplatePlatform extends MatterbridgeDynamicPlatform {
-  constructor(matterbridge: PlatformMatterbridge, log: AnsiLogger, config: TemplatePlatformConfig) {
-    // Always call super(matterbridge, log, config)
-    super(matterbridge, log, config);
+/**
+ * Dynamic platform that exposes Reolink cameras, doorbells, and NVR channels.
+ */
+export class ReolinkPlatform extends MatterbridgeDynamicPlatform {
+  private readonly sessions: HostSession[] = [];
+  private push: PushService | undefined;
+  private emailUsername: string | undefined;
+  private emailPassword: string | undefined;
 
-    // Verify that Matterbridge is the correct version
-    if (typeof this.verifyMatterbridgeVersion !== 'function' || !this.verifyMatterbridgeVersion('3.11.0')) {
+  /**
+   * Verify the Matterbridge version and store the platform dependencies.
+   *
+   * @param {PlatformMatterbridge} matterbridge Matterbridge host
+   * @param {AnsiLogger} log Platform logger
+   * @param {ReolinkPlatformConfig} config Plugin configuration
+   * @throws {Error} When Matterbridge is older than 3.11.0
+   */
+  constructor(matterbridge: PlatformMatterbridge, log: AnsiLogger, config: ReolinkPlatformConfig) {
+    super(matterbridge, log, config);
+    if (!this.verifyMatterbridgeVersion('3.11.0')) {
       throw new Error(
         `This plugin requires Matterbridge version >= "3.11.0". Please update Matterbridge from ${this.matterbridge.matterbridgeVersion} to the latest version in the frontend.`,
       );
     }
-
     this.log.info(`Initializing platform ${this.config.name}...`);
-    // You can initialize your platform here, like setting up initial state or loading configurations.
-
-    this.log.info(`Platform ${this.config.name} initialized successfully`);
   }
 
+  /**
+   * Log in to each configured host and register its devices.
+   *
+   * @param {string | undefined} reason Start reason supplied by Matterbridge
+   * @returns {Promise<void>} Resolves when every host has been started or skipped
+   */
   override async onStart(reason?: string): Promise<void> {
     this.log.info(`Starting platform ${this.config.name} with reason: ${reason ?? 'no reason provided'}...`);
-
-    // Wait for the platform to fully load the select if you use them.
     await this.ready;
-
-    // Clean the selectDevice and selectEntity maps, if you want to reset the select. This is useful when you have an API that sends all the devices and you want to rediscover all of them.
     await this.clearSelect();
-
-    // Implements your own logic there
-    await this.discoverDevices();
-
-    this.log.info(`Platform ${this.config.name} started successfully`);
-  }
-
-  override async onConfigure(): Promise<void> {
-    // Always call super.onConfigure()
-    await super.onConfigure();
-
-    this.log.info(`Configuring platform ${this.config.name}...`);
-
-    // Configure all your devices. The persisted attributes need to be updated.
-    for (const device of this.getDevices()) {
-      this.log.info(`Configuring device ${device.deviceName} with id ${device.originalId}`);
-      // You can update the device state here, for example:
-      if (device.id === 'outlet1') {
-        // Set the outlet to be on by default with setCluster or setAttribute methods. Prefer setting the cluster when more attributes need to be updated.
-        // await device.setCluster(OnOff, { onOff: true }, this.log); // this.log is optional, but it is useful to log the attribute changes.
-        await device.setAttribute(OnOff, 'onOff', true, this.log); // this.log is optional, but it is useful to log the attribute changes.
+    const settings = normalizeConfig(this.config);
+    for (const warning of settings.warnings) this.log.warn(warning);
+    if (settings.configurePush && settings.push === 'none') this.log.warn('configurePush is enabled but push is none, so camera push settings were not changed');
+    await this.startPush(settings);
+    const seen = new Set<string>();
+    for (const device of settings.devices) {
+      const key = `${device.host.toLowerCase()}:${device.port}`;
+      if (seen.has(key)) {
+        this.log.warn(`Skipped duplicate host ${device.host}`);
+        continue;
       }
-      if (device.id === 'thermo1') {
-        // Set the thermostat to heat mode by default with setCluster or setAttribute methods. Prefer setting the cluster when more attributes need to be updated.
-        await device.setCluster(Thermostat, { systemMode: Thermostat.SystemMode.Heat }, this.log); // this.log is optional, but it is useful to log the attribute changes.
-        // await device.setAttribute(Thermostat, 'systemMode', Thermostat.SystemMode.Heat, this.log); // this.log is optional, but it is useful to log the attribute changes.
-      }
+      seen.add(key);
+      const api = new ReolinkBaichuanApi({
+        host: device.host,
+        port: device.port,
+        username: device.username,
+        password: device.password,
+        logger: createReolinkLogger(this.log),
+        ...(device.uid === undefined ? {} : { uid: device.uid }),
+        ...(device.transport === undefined ? {} : { transport: device.transport }),
+      });
+      const session = new HostSession(device, this.hostContext(settings), api);
+      this.sessions.push(session);
+      await session.start();
     }
-
-    this.log.info(`Platform ${this.config.name} configured successfully`);
+    this.log.info(`Platform ${this.config.name} started`);
   }
 
-  // oxlint-disable-next-line typescript/require-await
+  /**
+   * Refresh battery attributes after Matterbridge restores persisted state.
+   *
+   * @returns {Promise<void>} Resolves when every battery read has been attempted
+   */
+  override async onConfigure(): Promise<void> {
+    await super.onConfigure();
+    this.log.info(`Configuring platform ${this.config.name}...`);
+    for (const session of this.sessions) await session.refreshBatteries();
+    this.log.info(`Platform ${this.config.name} configured`);
+  }
+
+  /**
+   * Record a logger level change. Nodelink logs follow the same platform logger.
+   *
+   * @param {LogLevel} logLevel New logger level
+   * @returns {Promise<void>} Resolves immediately
+   */
   override async onChangeLoggerLevel(logLevel: LogLevel): Promise<void> {
     this.log.info(`onChangeLoggerLevel called with: ${logLevel}`);
-    // Change here the logger level of the api you use or of your devices
+    await Promise.resolve();
   }
 
+  /**
+   * Close cameras and push intakes.
+   *
+   * @param {string | undefined} reason Shutdown reason supplied by Matterbridge
+   * @returns {Promise<void>} Resolves when cleanup has been attempted
+   */
   override async onShutdown(reason?: string): Promise<void> {
-    // Always call super.onShutdown(reason)
     await super.onShutdown(reason);
-
     this.log.info(`Shutting down platform ${this.config.name} with reason: ${reason ?? 'no reason provided'}...`);
-
+    for (const session of this.sessions) await session.shutdown();
+    this.sessions.length = 0;
+    if (this.push !== undefined) {
+      await this.push.stop();
+      this.push = undefined;
+    }
     if (this.config.unregisterOnShutdown) await this.unregisterAllDevices();
-
-    this.log.info(`Platform ${this.config.name} shut down successfully`);
+    this.log.info(`Platform ${this.config.name} shut down`);
   }
 
-  private async discoverDevices(): Promise<void> {
-    this.log.info('Discovering devices...');
-    // Implement device discovery logic here.
-    // For example, you might fetch devices from an API.
-    // and register them with the Matterbridge instance.
-
-    // Example: Create and register an outlet device (shows how to use the addCommandHandler method)
-    // If you want to create an Accessory platform plugin and your platform extends MatterbridgeAccessoryPlatform,
-    // instead of createDefaultBridgedDeviceBasicInformationClusterServer, call createDefaultBasicInformationClusterServer().
-    const outlet = new MatterbridgeEndpoint(onOffPlugInUnit, { id: 'outlet1' })
-      .createDefaultBridgedDeviceBasicInformationClusterServer('Outlet', 'SN123456', this.matterbridge.aggregatorVendorId, 'Matterbridge', 'Matterbridge Outlet', 10000, '1.0.0')
-      .createDefaultPowerSourceWiredClusterServer()
-      .addRequiredClusters() // This will add both server and client clusters that are required by the device.
-      .addCommandHandler('on', (data) => {
-        // This is called before any validation and state updates are applied. You can use this to intercept commands early.
-        outlet.log.info(`Command ${data.command} called on cluster ${data.cluster}`);
-      })
-      .addCommandHandler('off', (data) => {
-        // This is called before any validation and state updates are applied. You can use this to intercept commands early.
-        outlet.log.info(`Command ${data.command} called on cluster ${data.cluster}`);
-      })
-      .subscribeCommand(OnOff, 'on', (data) => {
-        // This is called after the command has been validated and state updates have been applied. You can use this to react to the command execution.
-        outlet.log.info(`Command ${data.command} executed on cluster ${data.cluster}`);
-      })
-      .subscribeCommand(OnOff, 'off', (data) => {
-        // This is called after the command has been validated and state updates have been applied. You can use this to react to the command execution.
-        outlet.log.info(`Command ${data.command} executed on cluster ${data.cluster}`);
-      });
-
-    // Set the selectDevice for the outlet we created. This is used to link the device with the select in the frontend.
-    this.setSelectDevice('SN123456', 'Outlet');
-
-    // Validate the device with the select before registering it.
-    if (this.validateDevice(['Outlet', 'SN123456'])) {
-      // Register the device with this Matterbridge Platform.
-      await this.registerDevice(outlet);
+  /**
+   * Start email and webhook intakes when the config asks for them.
+   *
+   * @param {NormalizedConfig} settings Normalized settings
+   * @returns {Promise<void>} Resolves when the intakes have started or been skipped
+   */
+  private async startPush(settings: NormalizedConfig): Promise<void> {
+    if (settings.push === 'none') return;
+    if (settings.push === 'email' || settings.push === 'both') {
+      try {
+        const filePath = path.join(this.matterbridge.matterbridgeDirectory, 'matterbridge-reolink-email-push.json');
+        const credentials = await loadOrCreatePushCredentials(filePath);
+        this.emailUsername = credentials.username;
+        this.emailPassword = credentials.password;
+        if (credentials.created) this.log.info(`Created email push credentials in ${filePath}`);
+      } catch (error) {
+        this.log.error(`Email push credentials failed: ${errorText(error)}`);
+        if (settings.push === 'email') return;
+      }
     }
+    const ipv4Address = this.matterbridge.systemInformation.ipv4Address;
+    if (settings.configurePush && ipv4Address === undefined) this.log.warn('configurePush was skipped because the bridge IPv4 address is unknown');
+    this.push = new PushService({
+      mode: settings.push,
+      log: this.log,
+      emailPort: settings.emailPushPort,
+      webhookPort: settings.webhookPort,
+      domain: settings.emailPushDomain,
+      username: this.emailUsername ?? 'reolink-push',
+      password: this.emailPassword ?? 'unused',
+      ...(ipv4Address === undefined ? {} : { ipv4Address }),
+    });
+    await this.push.start();
+  }
 
-    // Example: Create and register an thermostat device (shows how to use the subscribeAttribute method to listen for attribute changes)
-    // If you want to create an Accessory platform plugin and your platform extends MatterbridgeAccessoryPlatform,
-    // instead of createDefaultBridgedDeviceBasicInformationClusterServer, call createDefaultBasicInformationClusterServer().
-    const thermo = new MatterbridgeEndpoint(thermostat, { id: 'thermo1' })
-      .createDefaultBridgedDeviceBasicInformationClusterServer(
-        'Thermostat',
-        'SN654321',
-        this.matterbridge.aggregatorVendorId,
-        'Matterbridge',
-        'Matterbridge Thermostat',
-        10000,
-        '1.0.0',
-      )
-      .createDefaultPowerSourceBatteryClusterServer()
-      // Configure realistic setpoint limits (7-30 °C heating, 16-35 °C cooling) instead of the 0-50 °C
-      // defaults, so the heating/cooling limits satisfy the Matter spec minimum of 7 °C for MinHeatSetpointLimit.
-      .createDefaultThermostatClusterServer(23, 21, 25, 2.5, 7, 30, 16, 35)
-      .addRequiredClusters() // This will add both server and client clusters that are required by the device.
-      .subscribeAttribute(Thermostat, 'systemMode', (newValue: Thermostat.SystemMode, oldValue: Thermostat.SystemMode, context: ActionContext) => {
-        thermo.log.info(`Attribute systemMode changed ${context.fabric === undefined ? 'offline' : 'online'} from ${oldValue} to ${newValue}`);
-      })
-      .subscribeAttribute(Thermostat, 'occupiedCoolingSetpoint', (newValue: number, oldValue: number, context: ActionContext) => {
-        thermo.log.info(`Attribute occupiedCoolingSetpoint changed ${context.fabric === undefined ? 'offline' : 'online'} from ${oldValue} to ${newValue}`);
-      })
-      .subscribeAttribute(Thermostat, 'occupiedHeatingSetpoint', (newValue: number, oldValue: number, context: ActionContext) => {
-        thermo.log.info(`Attribute occupiedHeatingSetpoint changed ${context.fabric === undefined ? 'offline' : 'online'} from ${oldValue} to ${newValue}`);
-      });
-
-    // Set the selectDevice for the thermostat we created. This is used to link the device with the select in the frontend.
-    this.setSelectDevice('SN654321', 'Thermostat');
-
-    // Validate the device with the select before registering it.
-    if (this.validateDevice(['Thermostat', 'SN654321'])) {
-      // Register the device with this Matterbridge Platform.
-      await this.registerDevice(thermo);
-    }
-
-    this.log.info('Devices registered successfully...');
+  /**
+   * Build the callbacks shared by every host session.
+   *
+   * @param {NormalizedConfig} settings Normalized settings
+   * @returns {HostContext} Host context
+   */
+  private hostContext(settings: NormalizedConfig): HostContext {
+    const ipv4Address = this.matterbridge.systemInformation.ipv4Address;
+    return {
+      log: this.log,
+      reolinkLogger: createReolinkLogger(this.log),
+      vendorId: this.matterbridge.aggregatorVendorId,
+      eventHoldSeconds: settings.eventHoldSeconds,
+      batteryPollSeconds: settings.batteryPollSeconds,
+      restartDelayMs: 250,
+      configurePush: settings.configurePush,
+      emailPort: settings.emailPushPort,
+      domain: settings.emailPushDomain,
+      ...(ipv4Address === undefined ? {} : { ipv4Address }),
+      ...(this.push === undefined ? {} : { push: this.push }),
+      ...(this.emailUsername === undefined || this.emailPassword === undefined ? {} : { pushUsername: this.emailUsername, pushPassword: this.emailPassword }),
+      validateDevice: (names) => this.validateDevice(names),
+      setSelectDevice: (serial, name) => {
+        this.setSelectDevice(serial, name);
+      },
+      registerDevice: async (device) => {
+        await this.registerDevice(device);
+      },
+    };
   }
 }

@@ -1,26 +1,25 @@
 {
-  "name": "matterbridge-plugin-template",
-  "version": "2.2.2",
-  "description": "Matterbridge Template Plugin",
-  "author": "https://github.com/Luligu",
+  "name": "matterbridge-reolink",
+  "version": "1.0.0",
+  "description": "Matterbridge plugin for Reolink cameras, doorbells, and NVRs",
+  "author": "https://github.com/RyanMorash",
   "license": "Apache-2.0",
-  "homepage": "https://www.npmjs.com/package/matterbridge-plugin-template",
+  "homepage": "https://github.com/RyanMorash/matterbridge-reolink",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Luligu/matterbridge-plugin-template.git"
+    "url": "git+https://github.com/RyanMorash/matterbridge-reolink.git"
   },
   "bugs": {
-    "url": "https://github.com/Luligu/matterbridge-plugin-template/issues"
-  },
-  "funding": {
-    "type": "buymeacoffee",
-    "url": "https://www.buymeacoffee.com/luligugithub"
+    "url": "https://github.com/RyanMorash/matterbridge-reolink/issues"
   },
   "keywords": [
     "matterbridge",
     "plugin",
-    "template",
+    "reolink",
+    "camera",
+    "doorbell",
+    "nvr",
     "matter.js",
     "matter-node.js",
     "matter",
@@ -131,6 +130,7 @@
     "npmPublishTagLatest": "npx shx cp package.json package.json.backup && npm run prepublishOnly && npm publish --tag latest && npx shx cp package.json.backup package.json && npx shx rm -f package.json.backup && npm run reset"
   },
   "dependencies": {
+    "@apocaliss92/nodelink-js": "0.12.5",
     "node-ansi-logger": "3.3.2",
     "node-persist-manager": "2.1.2"
   },
