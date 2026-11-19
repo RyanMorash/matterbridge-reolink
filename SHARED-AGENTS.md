@@ -12,7 +12,7 @@ This repository supplies shared guidance through [AGENTS.md](./AGENTS.md) and [.
 | `.agents/rules/chip-tests.instructions.md`      | Configure and run the CHIP conformance test harness                                                                                                        |
 | `.agents/skills/verify-agent-context/SKILL.md`  | Verify the agent loaded this context — `$verify-agent-context` (Codex), `@verify-agent-context` (Bionic / LM Studio), `/verify-agent-context` (all others) |
 
-Shared rules and skills live in `.agents/`; the main instructions live in `AGENTS.md`, which also references `STYLEGUIDE.md`. The template supplies wrappers for Claude Code and Copilot and direct entry points for Codex, Gemini / Antigravity and Bionic / LM Studio. Loading depends on the client and its configuration; the table describes the repository setup.
+Shared rules and skills live in `.agents/`; the main instructions live in `AGENTS.md`, which also references `STYLEGUIDE.md`. This repository supplies wrappers for Claude Code and Copilot and direct entry points for Codex, Gemini / Antigravity and Bionic / LM Studio. Loading depends on the client and its configuration; the table describes the repository setup.
 
 | Tool                               | Instructions                                           | Rules                                                 | Skills                                              |
 | ---------------------------------- | ------------------------------------------------------ | ----------------------------------------------------- | --------------------------------------------------- |

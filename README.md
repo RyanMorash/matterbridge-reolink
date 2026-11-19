@@ -45,8 +45,6 @@ Platform fields are `whiteList`, `blackList`, `debug`, `unregisterOnShutdown`, `
 
 ffmpeg must be on `PATH`. Matterbridge shells out to it for WebRTC and snapshots. When email or webhook push is enabled, the camera must be able to reach the bridge. Leave `configurePush` off unless you want the plugin to change the camera’s SMTP or webhook URL. Passwords stay in the plugin config and are not written to the log. A failed login is logged and skipped; the other devices still start.
 
-The development container, toolchain, and workflows below come from the Matterbridge plugin template.
-
 ## Available workflows
 
 The project has the following already configured workflows:
@@ -56,56 +54,6 @@ The project has the following already configured workflows:
 - **codeql.yml**: run CodeQL on the main and dev branches on each push and pull request.
 - **codecov.yml**: run CodeCov on the main and dev branches on each push and pull request. You need a codecov account and to add your CODECOV_TOKEN to the repository secrets.
 - **chip-tests.yml**: run the CHIP conformance test suite on ubuntu every monday at 03:00 UTC and on demand (workflow_dispatch). See [chipTests.md](./chipTests.md) and the `chip:start`, `chip:test` and `chip:stop` scripts.
-
-## ⚠️ Warning: GitHub Actions Costs for Private Repositories
-
-**Important**: If you plan to use this template in a **private repository**, be aware that GitHub Actions usage may incur costs:
-
-- **Free tier limits**: Private repositories have limited free GitHub Actions minutes per month (2,000 minutes for free accounts).
-- **Workflow intensity**: This template includes multiple workflows that run on different operating systems (Ubuntu, macOS, Windows) and Node.js versions (22, 24, 26), which can consume minutes quickly.
-- **Daily automated workflows**: The dev publishing workflows run daily, which can add up over time.
-- **Pricing varies by OS**: macOS runners cost 10x more than Ubuntu runners, Windows runners cost 2x more.
-
-**Recommendations for private repos**:
-
-- Monitor your GitHub Actions usage in your account settings.
-- Consider disabling some workflows or reducing the OS/Node.js version matrix.
-- Review GitHub's [pricing for Actions](https://github.com/pricing) to understand costs.
-- For public repositories, GitHub Actions are free with generous limits.
-
-## Getting Started
-
-1. Create a repository from this template using the [template feature of GitHub](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template).
-2. Clone it locally and open the cloned folder project with [VS Code](https://code.visualstudio.com/). If you have docker or docker desktop, just run `code .`.
-3. When prompted, reopen in the devcontainer and select a runtime (**Matterbridge Plugin Node Dev Container** or **Matterbridge Plugin Bun Dev Container**). VS Code will automatically build and start the development environment with all dependencies installed.
-4. Update the code and configuration files as needed for your plugin. Change the name (keep always matterbridge- at the beginning of the name), version, description, author, homepage, repository, bugs and funding in the package.json.
-5. Follow the instructions in the matterbridge [README-DEV](https://github.com/Luligu/matterbridge/blob/main/README-DEV.md) and comments in module.ts to implement your plugin logic.
-
-## Periodical Updates
-
-This template evolves over time to keep up with Matterbridge, Node.js, TypeScript, and the surrounding tooling ecosystem. Periodically pulling in the latest template changes helps your plugin benefit from:
-
-- Security and dependency updates (Node.js and tooling).
-- CI improvements (new Node versions, workflow hardening, and cross-platform fixes).
-- Developer experience updates (Dev Container tweaks, lint/format configs, test runner updates).
-
-If your plugin repository was created from this template, it’s a good habit to review new template releases/commits and selectively copy the relevant files into your plugin repo. Typical “template-owned” areas to keep in sync include:
-
-- `.agents/` (shared agent instructions: rules and skills — the single source of truth)
-- `.antigravity/` (Gemini / Antigravity settings)
-- `.claude/` (Claude AI settings, mirrored rules and skills)
-- `.codex/` (Codex AI settings)
-- `.devcontainer/` (development environment and extensions)
-- `.github/` (Copilot AI settings, mirrored rules and skills, and build/publish/CodeQL/Codecov/CHIP pipelines)
-- `.vscode/` (repo settings and tasks coordinated with tooling configs)
-- `AGENTS.md` (shared agent instructions)
-- `CLAUDE.md` (Claude AI instructions)
-- `GEMINI.md` (Gemini / Antigravity instructions)
-- `STYLEGUIDE.md` (Generic AI instructions)
-- Tooling configs like `.oxlintrc.json`, `.oxfmtrc.json`, `tsconfig*.json`, `vite.config.ts`
-- Helper scripts under `scripts/` (release/version/CHIP automation)
-
-Tip: prefer copying and adapting these files rather than rewriting them from scratch—staying close to the template makes future updates faster and less error-prone.
 
 ## Using the Dev Container
 
