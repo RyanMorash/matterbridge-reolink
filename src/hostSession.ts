@@ -151,7 +151,10 @@ export class HostSession {
     }
     const channels = await this.loadChannels();
     for (const channel of channels) await this.exposeChannel(channel, channels.length);
-    if (this.channels.size === 0) return;
+    if (this.channels.size === 0) {
+      await this.safeClose();
+      return;
+    }
     try {
       await this.api.onSimpleEvent(this.onEvent);
       this.subscribed = true;
@@ -389,7 +392,8 @@ export class HostSession {
       this.enqueueMove(runtime, readPosition(data.request));
     });
     runtime.primary.subscribeCommand('CameraAvSettingsUserLevelManagement', 'mptzRelativeMove', (data) => {
-      this.enqueueMove(runtime, readRelative(data.request, runtime.position));
+      const request = data.request;
+      this.enqueueMove(runtime, () => readRelative(request, runtime.position));
     });
     runtime.primary.subscribeCommand('CameraAvSettingsUserLevelManagement', 'mptzMoveToPreset', (data) => {
       const presetId = readNumber(data.request, 'presetId');
@@ -597,12 +601,12 @@ export class HostSession {
    * Queue a mechanical move.
    *
    * @param {ChannelRuntime} runtime Camera being moved
-   * @param {Partial<PtzPosition>} target Absolute target. Omitted axes stay put.
+   * @param {Partial<PtzPosition> | (() => Partial<PtzPosition>)} target Absolute target, or a function that reads it when the move runs. Omitted axes stay put.
    * @returns {void}
    */
-  private enqueueMove(runtime: ChannelRuntime, target: Partial<PtzPosition>): void {
+  private enqueueMove(runtime: ChannelRuntime, target: Partial<PtzPosition> | (() => Partial<PtzPosition>)): void {
     this.enqueue(async () => {
-      const planned = movesForTarget(runtime.position, target);
+      const planned = movesForTarget(runtime.position, typeof target === 'function' ? target() : target);
       for (const move of planned.moves) {
         const command: PtzCommand = { action: 'start', command: move.command, speed: move.speed, autoStopMs: move.autoStopMs };
         await this.api.ptz(runtime.channel, command);
@@ -707,8 +711,37 @@ export class HostSession {
       await this.stopRtsp(runtime);
       const url = await this.startRtsp(runtime);
       if (url === undefined) this.context.log.warn(`RTSP proxy did not restart for ${this.device.host} channel ${channel}`);
+      else await this.publishStream(runtime, url);
     } finally {
       this.restarting.delete(channel);
+    }
+  }
+
+  /**
+   * Point Matter live view and snapshots at a replacement RTSP proxy.
+   *
+   * Composed cameras keep the WebRTC cluster on the Camera child. An endpoint that is not commissioned yet rejects
+   * the state update; the next restart tries again.
+   *
+   * @param {ChannelRuntime} runtime Channel whose stream changed
+   * @param {string} url Local RTSP url
+   * @returns {Promise<void>} Resolves when the update has been attempted
+   */
+  private async publishStream(runtime: ChannelRuntime, url: string): Promise<void> {
+    const endpoint = runtime.primary.getChildEndpointById('Camera') ?? runtime.primary;
+    try {
+      await endpoint.setStateOf('webRtcTransportProvider', {
+        weriftOfferOptions: {
+          offerVideo: true,
+          offerAudio: true,
+          videoSource: 'rtsp',
+          audioSource: 'rtsp',
+          videoSourceDevice: url,
+          audioSourceDevice: url,
+        },
+      });
+    } catch (error) {
+      this.context.log.warn(`Stream source was not updated for ${this.device.host} channel ${runtime.channel}: ${errorText(error)}`);
     }
   }
 

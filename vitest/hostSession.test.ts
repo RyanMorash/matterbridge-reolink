@@ -247,6 +247,11 @@ describe('HostSession', () => {
     camera?.emitCommand('cameraAvSettingsUserLevelManagement', 'mptzSetPosition', { pan: 10, tilt: 5, zoom: 2 }, commandContext);
     await flush();
     expect(api.ptz).toHaveBeenCalled();
+    const movesBefore = api.ptz.mock.calls.length;
+    camera?.emitCommand('cameraAvSettingsUserLevelManagement', 'mptzRelativeMove', { panDelta: 30 }, commandContext);
+    camera?.emitCommand('cameraAvSettingsUserLevelManagement', 'mptzRelativeMove', { panDelta: 30 }, commandContext);
+    await flush();
+    expect(api.ptz.mock.calls.length - movesBefore).toBe(2);
     camera?.emitCommand('cameraAvSettingsUserLevelManagement', 'mptzRelativeMove', { panDelta: 5 }, commandContext);
     camera?.emitCommand('cameraAvSettingsUserLevelManagement', 'mptzRelativeMove', { tiltDelta: 1, zoomDelta: 0.2 }, commandContext);
     camera?.emitCommand('cameraAvSettingsUserLevelManagement', 'mptzMoveToPreset', { presetId: 2 }, commandContext);
@@ -295,12 +300,23 @@ describe('HostSession', () => {
 
   it('restarts a closed proxy and keeps the listen port', async () => {
     const { api, ctx } = await open();
+    const camera = ctx.registered[0];
+    if (camera === undefined) throw new Error('camera was not registered');
+    const setState = vi.spyOn(camera, 'setStateOf').mockImplementation(async () => {
+      await Promise.resolve();
+    });
     harness.servers[0]?.isActive.mockReturnValue(false);
     harness.servers[0]?.emit('close');
     api.emit({ type: 'online', channel: 0, timestamp: 1 });
     await flush();
     expect(harness.servers).toHaveLength(2);
     expect(harness.servers[1]?.options.listenPort).toBe(8554);
+    expect(setState).toHaveBeenCalledWith(
+      'webRtcTransportProvider',
+      expect.objectContaining({
+        weriftOfferOptions: expect.objectContaining({ videoSourceDevice: 'rtsp://127.0.0.1:8554/stream', audioSourceDevice: 'rtsp://127.0.0.1:8554/stream' }),
+      }),
+    );
     harness.servers[1]?.emit('error', new Error('reset'));
     harness.servers[1]?.emit('close');
     await flush();
@@ -393,6 +409,9 @@ describe('HostSession', () => {
       .onOff$Changed?.emit(false, true, commandContext);
     await flush();
     expect(ctx.log.error).toHaveBeenCalledWith('Siren command failed for 10.0.0.8 channel 0: siren');
+    harness.servers[0]?.emit('close');
+    await flush();
+    expect(ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining('Stream source was not updated for 10.0.0.8 channel 0'));
     await session.shutdown();
     trigger.mockRestore();
   });
@@ -452,9 +471,10 @@ describe('HostSession', () => {
   });
 
   it('does not open RTSP for a device blocked by the whitelist', async () => {
-    const { ctx } = await open(device(), { validateDevice: () => false });
+    const { api, ctx } = await open(device(), { validateDevice: () => false });
     expect(ctx.registered).toEqual([]);
     expect(harness.servers).toEqual([]);
+    expect(api.close).toHaveBeenCalled();
   });
 
   it('logs a failed login and continues after a close error', async () => {
@@ -473,6 +493,7 @@ describe('HostSession', () => {
     expect(created.ctx.registered).toEqual([]);
     expect(created.api.onSimpleEvent).not.toHaveBeenCalled();
     expect(created.ctx.log.error).toHaveBeenCalledWith('Capabilities failed for 10.0.0.8 channel 0: no caps');
+    expect(created.api.close).toHaveBeenCalled();
     await created.session.shutdown();
     expect(created.api.offSimpleEvent).not.toHaveBeenCalled();
   });

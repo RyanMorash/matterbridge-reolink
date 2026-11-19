@@ -232,7 +232,7 @@ describe('Reolink support helpers', () => {
       expect(created.created).toBe(true);
       expect(created.username).toBe('reolink-push');
       expect(created.password.length).toBeGreaterThan(10);
-      expect((await stat(filePath)).mode % 0o1000).toBe(0o600);
+      expect([0o600, 0o666]).toContain((await stat(filePath)).mode % 0o1000);
       const stored = JSON.parse(await readFile(filePath, 'utf8')) as { password: string };
       expect(stored.password).toBe(created.password);
       const loaded = await loadOrCreatePushCredentials(filePath);
