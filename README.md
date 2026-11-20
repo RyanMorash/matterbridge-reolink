@@ -26,9 +26,10 @@ If you like this project, please consider giving it a star on [GitHub](https://g
 - Motion, person, vehicle, pet, and package detection each become a bridged occupancy sensor when the camera actually reports that capability. Occupancy clears after `eventHoldSeconds` (default 30).
 - A siren becomes a sibling on/off plug.
 - A battery camera reports a rechargeable power source. The plugin polls battery percent, charge level, and voltage.
-- Live view uses the sub stream by default (`profile` can be `main`, `sub`, or `ext`). Snapshots use the same local RTSP URL.
+- Live view uses the sub stream by default (`profile` can be `main`, `sub`, or `ext`). Snapshots use the same local RTSP URL. The camera microphone rides that stream.
+- A channel with ADPCM talk opens a dedicated Baichuan talk socket when a controller sends microphone audio, and forwards it to the camera speaker. The socket stays closed until audio arrives, then closes after 10 seconds of silence. One talker is active per channel. Half-duplex cameras are advertised as half duplex. This stays off, with one log line, until the linked Matterbridge build can deliver controller audio.
 - Optional email or webhook push delivers events from battery cameras that drop the Baichuan socket while they sleep. `configurePush` is off unless you opt in to writing the camera’s SMTP or webhook settings.
-- Two-way talk, recordings, chime pairing, privacy mode, and UDP discovery are not in this version. Devices are added explicitly.
+- Recordings, chime pairing, privacy mode, and UDP discovery are not in this version. Devices are added explicitly.
 
 ## Configuration
 

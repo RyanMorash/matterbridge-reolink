@@ -36,6 +36,7 @@ interface FakeApi {
   subscribeBaichuanWebhookEvents: ReturnType<typeof vi.fn>;
   setupEmailPushToManager: ReturnType<typeof vi.fn>;
   setupBaichuanWebhookToManager: ReturnType<typeof vi.fn>;
+  getTalkAbility: ReturnType<typeof vi.fn>;
 }
 
 const harness = vi.hoisted(() => {
@@ -81,6 +82,7 @@ vi.mock('@apocaliss92/nodelink-js', () => ({
         subscribeBaichuanWebhookEvents: vi.fn(() => vi.fn()),
         setupEmailPushToManager: vi.fn(async () => ({})),
         setupBaichuanWebhookToManager: vi.fn(async () => ({})),
+        getTalkAbility: vi.fn(async () => ({ duplexList: [], audioStreamModeList: [], audioConfigList: [] })),
       };
       Object.assign(this, api);
       harness.apis.push(api);

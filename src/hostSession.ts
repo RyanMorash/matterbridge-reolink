@@ -3,7 +3,7 @@
  * @description Login to one Reolink host and expose its channels.
  * @author RyanMorash
  * @created 2026-11-19
- * @version 1.0.0
+ * @version 1.1.0
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -32,10 +32,12 @@ import { createChannelDevices } from './createDevices.js';
 import { actionForEvent, primaryKind, sensorKinds } from './detection.js';
 import { channelLabel, endpointId, limitLabel } from './labels.js';
 import { errorText, type createReolinkLogger } from './logger.js';
+import { type TalkEndpointHooks, matterbridgeAcceptsTalk, noteTalkUnavailable } from './matterTalk.js';
 import { armOccupancy, clearOccupancyTimers, setOccupancy } from './occupancy.js';
 import { movesForTarget, PTZ_HOME, type PtzPosition } from './ptz.js';
 import type { PushService } from './pushService.js';
 import { rtspPort } from './rtsp.js';
+import { TalkBridge, talkSupportFromAbility } from './talk.js';
 
 /** Platform services a host session needs. */
 export interface HostContext {
@@ -116,6 +118,7 @@ export class HostSession {
   private readonly occupancyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pushOff: Array<() => void> = [];
   private readonly restarting = new Set<number>();
+  private readonly talkBridges = new Map<number, TalkBridge>();
   private ptzChain: Promise<void> = Promise.resolve();
   private closed = false;
   private subscribed = false;
@@ -193,6 +196,8 @@ export class HostSession {
       this.subscribed = false;
     }
     for (const runtime of this.channels.values()) await this.stopRtsp(runtime);
+    for (const bridge of this.talkBridges.values()) await bridge.shutdown();
+    this.talkBridges.clear();
     await this.safeClose();
   }
 
@@ -243,11 +248,13 @@ export class HostSession {
     if (!this.context.validateDevice([facts.name, facts.serial])) return;
     const slot: RtspSlot = { channel: summary.channel };
     const rtspUrl = await this.startRtsp(slot);
-    const devices = createChannelDevices({ ...facts, rtspUrl, channel: summary.channel });
+    const cameraId = endpointId(facts.serial, summary.channel);
+    const talk = await this.talkFor(summary.channel, cameraId, rtspUrl);
+    const devices = createChannelDevices({ ...facts, rtspUrl, channel: summary.channel, ...(talk === undefined ? {} : { talk }) });
     const runtime: ChannelRuntime = {
       ...slot,
       name: facts.name,
-      cameraId: endpointId(facts.serial, summary.channel),
+      cameraId,
       hasBattery: facts.hasBattery,
       position: PTZ_HOME,
       primary: devices.primary,
@@ -364,6 +371,59 @@ export class HostSession {
     } catch (error) {
       this.context.log.debug(`Accessory state failed for ${this.device.host}: ${errorText(error)}`);
       return false;
+    }
+  }
+
+  /**
+   * Build speaker callbacks when this channel can talk and Matterbridge can play the audio.
+   *
+   * @param {number} channel Zero-based channel
+   * @param {string} deviceId Stable endpoint id passed to the talk socket
+   * @param {string | undefined} rtspUrl Local RTSP URL, absent when the proxy did not start
+   * @returns {Promise<TalkEndpointHooks | undefined>} Hooks for the camera, or undefined when talk stays off
+   */
+  private async talkFor(channel: number, deviceId: string, rtspUrl: string | undefined): Promise<TalkEndpointHooks | undefined> {
+    const support = await this.readTalkSupport(channel);
+    if (support === undefined) return undefined;
+    if (!matterbridgeAcceptsTalk()) {
+      noteTalkUnavailable(this.context.log);
+      return undefined;
+    }
+    if (rtspUrl === undefined) {
+      this.context.log.debug(`Talk skipped for ${this.device.host} channel ${channel}: the RTSP proxy is not running`);
+      return undefined;
+    }
+    const bridge = new TalkBridge(
+      channel,
+      deviceId,
+      async (talkChannel, options) => this.api.createDedicatedTalkSession(talkChannel, options),
+      this.context.log,
+      this.context.reolinkLogger,
+    );
+    this.talkBridges.set(channel, bridge);
+    return {
+      twoWayTalkSupport: support,
+      onRemoteAudio: (frame) => {
+        bridge.onRemoteAudio(frame);
+      },
+      onSessionClosed: (sessionId) => {
+        bridge.onSessionClosed(sessionId);
+      },
+    };
+  }
+
+  /**
+   * Read whether the channel can send ADPCM, and which duplex mode it offers.
+   *
+   * @param {number} channel Zero-based channel
+   * @returns {Promise<ReturnType<typeof talkSupportFromAbility>>} Duplex mode, or undefined when talk is unavailable
+   */
+  private async readTalkSupport(channel: number): Promise<ReturnType<typeof talkSupportFromAbility>> {
+    try {
+      return talkSupportFromAbility(await this.api.getTalkAbility(channel));
+    } catch (error) {
+      this.context.log.debug(`Talk ability failed for ${this.device.host} channel ${channel}: ${errorText(error)}`);
+      return undefined;
     }
   }
 

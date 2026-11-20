@@ -3,7 +3,7 @@
  * @description Build Matter endpoints for one Reolink channel.
  * @author RyanMorash
  * @created 2026-11-19
- * @version 1.0.0
+ * @version 1.1.0
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -26,6 +26,7 @@ import { Camera, FloodlightCamera, VideoDoorbell } from 'matterbridge/devices/ca
 
 import type { PrimaryKind, SensorKind } from './detection.js';
 import { endpointId, serialWithSuffix, withSuffix } from './labels.js';
+import { attachTalk, cameraTalkFields, type TalkEndpointHooks } from './matterTalk.js';
 
 /** Matter endpoints created for one channel. */
 export interface ChannelDevices {
@@ -77,6 +78,8 @@ export interface ChannelDeviceInput {
   readonly holdSeconds: number;
   /** Local RTSP URL. Omitted when the proxy did not start. */
   readonly rtspUrl?: string;
+  /** Speaker talk for this channel. Omitted when the camera cannot talk or Matterbridge cannot play it. */
+  readonly talk?: TalkEndpointHooks;
 }
 
 /**
@@ -128,7 +131,8 @@ function identify(endpoint: MatterbridgeEndpoint, input: ChannelDeviceInput, nam
  */
 export function createChannelDevices(input: ChannelDeviceInput): ChannelDevices {
   const powerSourceType = input.hasBattery ? 'Rechargeable' : 'Wired';
-  const weriftOfferOptions = streamOptions(input.rtspUrl);
+  const rtspOffer = streamOptions(input.rtspUrl);
+  const weriftOfferOptions = rtspOffer === undefined ? undefined : attachTalk(rtspOffer, input.talk);
   const id = endpointId(input.serial, input.channel);
   const primary = stamp(createPrimary(input, id, powerSourceType, weriftOfferOptions), input);
   const doorbell = input.kind === 'doorbell' ? primary.getChildEndpointById('Doorbell') : undefined;
@@ -174,27 +178,28 @@ function createPrimary(
   powerSourceType: 'Rechargeable' | 'Wired',
   weriftOfferOptions: ReturnType<typeof streamOptions>,
 ): MatterbridgeEndpoint {
+  const talkFields = cameraTalkFields(weriftOfferOptions === undefined ? undefined : input.talk);
   if (input.kind === 'doorbell') {
-    return new VideoDoorbell(input.name, input.serial, {
-      id,
-      powerSourceType,
-      ...(weriftOfferOptions === undefined ? {} : { cameraOptions: { weriftOfferOptions } }),
-    });
+    const cameraOptions: NonNullable<NonNullable<ConstructorParameters<typeof VideoDoorbell>[2]>['cameraOptions']> = {};
+    if (weriftOfferOptions !== undefined) cameraOptions.weriftOfferOptions = weriftOfferOptions;
+    Object.assign(cameraOptions, talkFields);
+    return new VideoDoorbell(input.name, input.serial, { id, powerSourceType, cameraOptions });
   }
   if (input.kind === 'floodlight') {
+    const cameraOptions: NonNullable<NonNullable<ConstructorParameters<typeof FloodlightCamera>[2]>['cameraOptions']> = {};
+    if (weriftOfferOptions !== undefined) cameraOptions.weriftOfferOptions = weriftOfferOptions;
+    Object.assign(cameraOptions, talkFields);
     return new FloodlightCamera(input.name, input.serial, {
       id,
       powerSourceType,
       lightOptions: { name: 'Light', onOff: input.lightOn },
-      ...(weriftOfferOptions === undefined ? {} : { cameraOptions: { weriftOfferOptions } }),
+      cameraOptions,
     });
   }
-  return new Camera(input.name, input.serial, {
-    id,
-    powerSourceType,
-    ptz: input.ptz,
-    ...(weriftOfferOptions === undefined ? {} : { weriftOfferOptions }),
-  });
+  const options: NonNullable<ConstructorParameters<typeof Camera>[2]> = { id, powerSourceType, ptz: input.ptz };
+  if (weriftOfferOptions !== undefined) options.weriftOfferOptions = weriftOfferOptions;
+  Object.assign(options, talkFields);
+  return new Camera(input.name, input.serial, options);
 }
 
 /**

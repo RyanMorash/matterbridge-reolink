@@ -11,6 +11,7 @@ import { PowerSource } from 'matterbridge/matter/clusters';
 
 import type { NormalizedDevice } from '../src/config.js';
 import { type HostContext, HostSession } from '../src/hostSession.js';
+import { resetTalkNotice, setMatterbridgeTalkSupport } from '../src/matterTalk.js';
 import type { PushService } from '../src/pushService.js';
 
 interface FakeApi {
@@ -37,6 +38,8 @@ interface FakeApi {
   subscribeBaichuanWebhookEvents: ReturnType<typeof vi.fn>;
   setupEmailPushToManager: ReturnType<typeof vi.fn>;
   setupBaichuanWebhookToManager: ReturnType<typeof vi.fn>;
+  getTalkAbility: ReturnType<typeof vi.fn>;
+  createDedicatedTalkSession: ReturnType<typeof vi.fn>;
   emit: (event: { type: string; channel: number; timestamp: number; battery?: object }) => void;
 }
 
@@ -82,6 +85,17 @@ const harness = vi.hoisted(() => {
         subscribeBaichuanWebhookEvents: vi.fn(() => vi.fn()),
         setupEmailPushToManager: vi.fn(async () => ({})),
         setupBaichuanWebhookToManager: vi.fn(async () => ({})),
+        getTalkAbility: vi.fn(async () => ({ duplexList: [], audioStreamModeList: [], audioConfigList: [] })),
+        createDedicatedTalkSession: vi.fn(async () => ({
+          info: {
+            channel: 0,
+            blockSize: 1,
+            fullBlockSize: 5,
+            audioConfig: { audioType: 'adpcm', sampleRate: 16000, samplePrecision: 16, lengthPerEncoder: 2, soundTrack: 'mono' },
+          },
+          sendAudio: vi.fn(async () => {}),
+          stop: vi.fn(async () => {}),
+        })),
         emit: (event: { type: string; channel: number; timestamp: number; battery?: object }): void => {
           for (const listener of listeners) listener(event);
         },
@@ -142,6 +156,7 @@ const harness = vi.hoisted(() => {
 vi.mock('@apocaliss92/nodelink-js', () => ({
   ReolinkBaichuanApi: harness.ReolinkBaichuanApi,
   BaichuanRtspServer: harness.BaichuanRtspServer,
+  encodeImaAdpcm: (pcm: Int16Array, blockSize: number): Buffer => Buffer.from([blockSize, pcm.length]),
 }));
 
 function capabilities(overrides: Record<string, boolean> = {}): Record<string, boolean | number> {
@@ -211,6 +226,8 @@ describe('HostSession', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    setMatterbridgeTalkSupport(undefined);
+    resetTalkNotice();
   });
 
   async function create(
@@ -643,5 +660,73 @@ describe('HostSession', () => {
     created.api.getNvrChannelsSummary.mockResolvedValue({ channels: [2], devices: [{ channel: 2, name: 'Gate', model: 'M'.repeat(80), serialNumber: 'GATE' }] });
     await created.session.start();
     expect(created.ctx.registered[0]?.productName).toHaveLength(64);
+  });
+
+  it('logs once when a camera can talk and Matterbridge cannot play it', async () => {
+    const created = await create(device({ name: 'Hub' }));
+    created.api.isNvrDevice.mockResolvedValue(true);
+    created.api.getTalkAbility.mockResolvedValue({
+      duplexList: ['half'],
+      audioStreamModeList: [],
+      audioConfigList: [{ audioType: 'adpcm', sampleRate: 16000, samplePrecision: 16, lengthPerEncoder: 1024, soundTrack: 'mono' }],
+    });
+    created.api.getNvrChannelsSummary.mockResolvedValue({
+      channels: [0, 1],
+      devices: [
+        { channel: 0, online: true, name: 'Porch' },
+        { channel: 1, online: true, name: 'Gate' },
+      ],
+    });
+    await created.session.start();
+    expect(created.ctx.registered.length).toBeGreaterThan(0);
+    const talkLogs = vi.mocked(created.ctx.log.info).mock.calls.filter((call) => typeof call[0] === 'string' && call[0].includes('Two-way talk stays off'));
+    expect(talkLogs).toHaveLength(1);
+    expect(created.api.createDedicatedTalkSession).not.toHaveBeenCalled();
+    await created.session.shutdown();
+  });
+
+  it('still exposes a channel when talk ability cannot be read', async () => {
+    const created = await create();
+    created.api.getTalkAbility.mockRejectedValue(new Error('no talk'));
+    await created.session.start();
+    expect(created.ctx.registered.length).toBeGreaterThan(0);
+    expect(created.ctx.log.debug).toHaveBeenCalledWith(expect.stringContaining('Talk ability failed'));
+    await created.session.shutdown();
+  });
+
+  it('forwards controller audio when Matterbridge accepts talk and skips talk without a proxy', async () => {
+    setMatterbridgeTalkSupport(true);
+    const created = await create();
+    created.api.getTalkAbility.mockResolvedValue({
+      duplexList: ['full'],
+      audioStreamModeList: [],
+      audioConfigList: [{ audioType: 'adpcm', sampleRate: 16000, samplePrecision: 16, lengthPerEncoder: 1024, soundTrack: 'mono' }],
+    });
+    await created.session.start();
+    const camera = created.ctx.registered[0];
+    const offer = camera?.getClusterServerOptions('WebRtcTransportProvider')?.weriftOfferOptions as
+      | { onRemoteAudio?: (frame: unknown) => void; onSessionClosed?: (id: number) => void }
+      | undefined;
+    offer?.onRemoteAudio?.({ sessionId: 7, pcm: Int16Array.from([1, 2, 3]), sampleRate: 16000 });
+    await vi.waitFor(() =>
+      expect(created.api.createDedicatedTalkSession).toHaveBeenCalledWith(0, expect.objectContaining({ idleTimeoutMs: 10000, deviceId: 'reolink-SER123-ch0' })),
+    );
+    const talkSession = await created.api.createDedicatedTalkSession.mock.results[0]?.value;
+    await vi.waitFor(() => expect(talkSession.sendAudio).toHaveBeenCalled());
+    offer?.onSessionClosed?.(7);
+    await vi.waitFor(() => expect(talkSession.stop).toHaveBeenCalled());
+    await created.session.shutdown();
+
+    harness.setRtsp({ failStart: true });
+    const offline = await create();
+    offline.api.getTalkAbility.mockResolvedValue({
+      duplexList: ['fd'],
+      audioStreamModeList: [],
+      audioConfigList: [{ audioType: 'adpcm', sampleRate: 8000, samplePrecision: 16, lengthPerEncoder: 256, soundTrack: 'mono' }],
+    });
+    await offline.session.start();
+    expect(offline.ctx.log.debug).toHaveBeenCalledWith(expect.stringContaining('RTSP proxy is not running'));
+    expect(offline.api.createDedicatedTalkSession).not.toHaveBeenCalled();
+    await offline.session.shutdown();
   });
 });
