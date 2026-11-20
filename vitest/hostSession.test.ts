@@ -931,6 +931,50 @@ describe('HostSession', () => {
     vi.useRealTimers();
   });
 
+  it('publishes the replacement proxy after an in-flight update', async () => {
+    setMatterbridgeTalkSupport(true);
+    const created = await open(device(), { restartDelayMs: 1000, batteryPollSeconds: 0 });
+    created.api.getTalkAbility.mockResolvedValue({
+      duplexList: ['full'],
+      audioStreamModeList: [],
+      audioConfigList: [{ audioType: 'adpcm', sampleRate: 16000, samplePrecision: 16, lengthPerEncoder: 1024, soundTrack: 'mono' }],
+    });
+    await created.session.start();
+    vi.useFakeTimers();
+    let release: () => void = () => {};
+    let step: 'reject' | 'hold' | 'ok' = 'reject';
+    const setState = vi.spyOn(MatterbridgeEndpoint.prototype, 'setStateOf').mockImplementation(async (cluster: string) => {
+      if (cluster !== 'webRtcTransportProvider') return;
+      if (step === 'reject') throw new Error('inactive');
+      if (step === 'hold') {
+        step = 'ok';
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+    });
+    harness.servers[0]?.emit('close');
+    await vi.advanceTimersByTimeAsync(1000);
+    step = 'hold';
+    created.api.emit({ type: 'online', channel: 0, timestamp: 5 });
+    const servers = harness.servers.length;
+    harness.servers.at(-1)?.emit('close');
+    vi.advanceTimersByTime(1000);
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
+    expect(harness.servers.length).toBeGreaterThan(servers);
+    const during = setState.mock.calls.filter((call) => call[0] === 'webRtcTransportProvider').length;
+    release();
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
+    expect(setState.mock.calls.filter((call) => call[0] === 'webRtcTransportProvider').length).toBeGreaterThan(during);
+    const republished = setState.mock.calls.findLast((call) => call[0] === 'webRtcTransportProvider');
+    const offer = (republished?.[1] as { weriftOfferOptions?: { onRemoteAudio?: (frame: unknown) => void } } | undefined)?.weriftOfferOptions;
+    offer?.onRemoteAudio?.({ sessionId: 9, pcm: Int16Array.from([1, 2, 3]), sampleRate: 16000 });
+    await vi.waitFor(() => expect(created.api.createDedicatedTalkSession).toHaveBeenCalled());
+    await created.session.shutdown();
+    setState.mockRestore();
+    vi.useRealTimers();
+  });
+
   it('ignores a stream update that finishes after shutdown', async () => {
     const created = await open();
     let release: () => void = () => {};

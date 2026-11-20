@@ -3,7 +3,7 @@
  * @description Login to one Reolink host and expose its channels.
  * @author RyanMorash
  * @created 2026-11-19
- * @version 1.1.5
+ * @version 1.1.6
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -805,9 +805,14 @@ export class HostSession {
     if (this.publishing.has(channel)) return;
     this.publishing.add(channel);
     const epoch = this.readEpoch(channel);
+    let replaced = false;
     try {
       const published = await this.publishStream(runtime, url);
-      if (this.closed || this.readEpoch(channel) !== epoch) return;
+      if (this.closed) return;
+      if (this.readEpoch(channel) !== epoch) {
+        replaced = true;
+        return;
+      }
       this.talkBridges.get(channel)?.setStreamReady(published);
       if (published) {
         this.unpublished.delete(channel);
@@ -819,6 +824,8 @@ export class HostSession {
       this.scheduleRepublish(runtime);
     } finally {
       this.publishing.delete(channel);
+      const current = this.channels.get(channel);
+      if (replaced && current?.rtsp !== undefined && current.rtsp.isActive()) void this.publishOffer(current, current.rtsp.getRtspUrl());
     }
   }
 
