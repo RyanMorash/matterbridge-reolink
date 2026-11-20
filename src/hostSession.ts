@@ -3,7 +3,7 @@
  * @description Login to one Reolink host and expose its channels.
  * @author RyanMorash
  * @created 2026-11-19
- * @version 1.1.4
+ * @version 1.1.5
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -122,6 +122,8 @@ export class HostSession {
   private readonly talkBridges = new Map<number, TalkBridge>();
   private readonly republishTimers = new Map<number, ReturnType<typeof setTimeout>>();
   private readonly republishAttempt = new Map<number, number>();
+  private readonly publishEpoch = new Map<number, number>();
+  private readonly publishing = new Set<number>();
   private readonly unpublished = new Set<number>();
   private ptzChain: Promise<void> = Promise.resolve();
   private closed = false;
@@ -774,6 +776,7 @@ export class HostSession {
       this.restarting.delete(channel);
       return;
     }
+    this.publishEpoch.set(channel, this.readEpoch(channel) + 1);
     try {
       await this.stopRtsp(runtime);
       const url = await this.startRtsp(runtime);
@@ -798,17 +801,25 @@ export class HostSession {
    * @returns {Promise<void>} Resolves when the update has been attempted
    */
   private async publishOffer(runtime: ChannelRuntime, url: string): Promise<void> {
-    const published = await this.publishStream(runtime, url);
-    if (this.closed) return;
-    this.talkBridges.get(runtime.channel)?.setStreamReady(published);
-    if (published) {
-      this.unpublished.delete(runtime.channel);
-      this.republishAttempt.delete(runtime.channel);
-      this.cancelRepublish(runtime.channel);
-      return;
+    const channel = runtime.channel;
+    if (this.publishing.has(channel)) return;
+    this.publishing.add(channel);
+    const epoch = this.readEpoch(channel);
+    try {
+      const published = await this.publishStream(runtime, url);
+      if (this.closed || this.readEpoch(channel) !== epoch) return;
+      this.talkBridges.get(channel)?.setStreamReady(published);
+      if (published) {
+        this.unpublished.delete(channel);
+        this.republishAttempt.delete(channel);
+        this.cancelRepublish(channel);
+        return;
+      }
+      this.unpublished.add(channel);
+      this.scheduleRepublish(runtime);
+    } finally {
+      this.publishing.delete(channel);
     }
-    this.unpublished.add(runtime.channel);
-    this.scheduleRepublish(runtime);
   }
 
   /**
@@ -834,6 +845,16 @@ export class HostSession {
       Math.min(base * 2 ** attempt, 30_000),
     );
     this.republishTimers.set(runtime.channel, timer);
+  }
+
+  /**
+   * Read the publish generation for one channel.
+   *
+   * @param {number} channel Channel to read
+   * @returns {number} Generation, or 0 before the first restart
+   */
+  private readEpoch(channel: number): number {
+    return this.publishEpoch.get(channel) ?? 0;
   }
 
   /**

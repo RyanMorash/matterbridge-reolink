@@ -855,6 +855,82 @@ describe('HostSession', () => {
     vi.useRealTimers();
   });
 
+  it('keeps a successful publish when a retry is due during the update', async () => {
+    setMatterbridgeTalkSupport(true);
+    const created = await open(device(), { restartDelayMs: 1000, batteryPollSeconds: 0 });
+    created.api.getTalkAbility.mockResolvedValue({
+      duplexList: ['full'],
+      audioStreamModeList: [],
+      audioConfigList: [{ audioType: 'adpcm', sampleRate: 16000, samplePrecision: 16, lengthPerEncoder: 1024, soundTrack: 'mono' }],
+    });
+    await created.session.start();
+    vi.useFakeTimers();
+    let release: () => void = () => {};
+    let rejectUpdate = true;
+    const setState = vi.spyOn(MatterbridgeEndpoint.prototype, 'setStateOf').mockImplementation(async (cluster: string) => {
+      if (cluster !== 'webRtcTransportProvider') return;
+      if (rejectUpdate) throw new Error('inactive');
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    harness.servers[0]?.emit('close');
+    await vi.advanceTimersByTimeAsync(1000);
+    rejectUpdate = false;
+    created.api.emit({ type: 'online', channel: 0, timestamp: 3 });
+    vi.advanceTimersByTime(1000);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    const accepted = setState.mock.calls.filter((call) => call[0] === 'webRtcTransportProvider').length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(setState.mock.calls.filter((call) => call[0] === 'webRtcTransportProvider').length).toBe(accepted);
+    const republished = setState.mock.calls.findLast((call) => call[0] === 'webRtcTransportProvider');
+    const offer = (republished?.[1] as { weriftOfferOptions?: { onRemoteAudio?: (frame: unknown) => void } } | undefined)?.weriftOfferOptions;
+    offer?.onRemoteAudio?.({ sessionId: 7, pcm: Int16Array.from([1, 2, 3]), sampleRate: 16000 });
+    await vi.waitFor(() => expect(created.api.createDedicatedTalkSession).toHaveBeenCalled());
+    await created.session.shutdown();
+    setState.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('drops a stream update that finishes after the proxy restart fails', async () => {
+    setMatterbridgeTalkSupport(true);
+    const created = await open(device(), { restartDelayMs: 1000, batteryPollSeconds: 0 });
+    created.api.getTalkAbility.mockResolvedValue({
+      duplexList: ['full'],
+      audioStreamModeList: [],
+      audioConfigList: [{ audioType: 'adpcm', sampleRate: 16000, samplePrecision: 16, lengthPerEncoder: 1024, soundTrack: 'mono' }],
+    });
+    await created.session.start();
+    vi.useFakeTimers();
+    let release: () => void = () => {};
+    let rejectUpdate = true;
+    const setState = vi.spyOn(MatterbridgeEndpoint.prototype, 'setStateOf').mockImplementation(async (cluster: string) => {
+      if (cluster !== 'webRtcTransportProvider') return;
+      if (rejectUpdate) throw new Error('inactive');
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    harness.servers[0]?.emit('close');
+    await vi.advanceTimersByTimeAsync(1000);
+    rejectUpdate = false;
+    created.api.emit({ type: 'online', channel: 0, timestamp: 4 });
+    harness.setRtsp({ failStart: true });
+    harness.servers.at(-1)?.emit('close');
+    vi.advanceTimersByTime(1000);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(created.ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining('RTSP proxy did not restart'));
+    const offer = setState.mock.calls.findLast((call) => call[0] === 'webRtcTransportProvider');
+    const audio = (offer?.[1] as { weriftOfferOptions?: { onRemoteAudio?: (frame: unknown) => void } } | undefined)?.weriftOfferOptions;
+    audio?.onRemoteAudio?.({ sessionId: 8, pcm: Int16Array.from([1, 2, 3]), sampleRate: 16000 });
+    expect(created.api.createDedicatedTalkSession).not.toHaveBeenCalled();
+    await created.session.shutdown();
+    setState.mockRestore();
+    vi.useRealTimers();
+  });
+
   it('ignores a stream update that finishes after shutdown', async () => {
     const created = await open();
     let release: () => void = () => {};
