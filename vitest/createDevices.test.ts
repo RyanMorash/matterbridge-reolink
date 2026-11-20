@@ -6,8 +6,10 @@
 
 import { MatterbridgeEndpoint } from 'matterbridge';
 import { Camera, FloodlightCamera, VideoDoorbell } from 'matterbridge/devices/camera';
+import { CameraAvStreamManagement } from 'matterbridge/matter/clusters';
 
 import { createChannelDevices, type ChannelDeviceInput } from '../src/createDevices.js';
+import { resetTalkNotice, setMatterbridgeTalkSupport } from '../src/matterTalk.js';
 
 function input(overrides: Partial<ChannelDeviceInput> = {}): ChannelDeviceInput {
   return {
@@ -32,6 +34,10 @@ function input(overrides: Partial<ChannelDeviceInput> = {}): ChannelDeviceInput 
 }
 
 describe('createChannelDevices', () => {
+  afterEach(() => {
+    setMatterbridgeTalkSupport(undefined);
+  });
+
   it('builds a camera, a doorbell, a floodlight, and sibling accessories', () => {
     const camera = createChannelDevices(
       input({ ptz: true, hasBattery: true, hasSiren: true, sirenOn: true, sensors: ['motion', 'person'], rtspUrl: 'rtsp://127.0.0.1:8554/stream' }),
@@ -63,5 +69,33 @@ describe('createChannelDevices', () => {
     expect(doorbell.doorbell).toBeUndefined();
     expect(floodlight.light).toBeUndefined();
     child.mockRestore();
+  });
+
+  it('adds speaker callbacks on the camera that owns WebRTC', () => {
+    setMatterbridgeTalkSupport(true);
+    const talk = {
+      twoWayTalkSupport: CameraAvStreamManagement.TwoWayTalkSupportType.FullDuplex,
+      onRemoteAudio: vi.fn(),
+      onSessionClosed: vi.fn(),
+    };
+    const url = 'rtsp://127.0.0.1:8554/stream';
+    const camera = createChannelDevices(input({ rtspUrl: url, talk }));
+    const doorbell = createChannelDevices(input({ kind: 'doorbell', rtspUrl: url, talk }));
+    const floodlight = createChannelDevices(input({ kind: 'floodlight', rtspUrl: url, talk }));
+    const offers = [camera.primary, doorbell.primary.getChildEndpointById('Camera'), floodlight.primary.getChildEndpointById('Camera')].map(
+      (endpoint) => endpoint?.getClusterServerOptions('WebRtcTransportProvider')?.weriftOfferOptions,
+    );
+    expect(offers[0]).toMatchObject({ acceptRemoteAudio: true, audioSourceDevice: url });
+    expect(offers[1]).toMatchObject({ acceptRemoteAudio: true });
+    expect(offers[2]).toMatchObject({ acceptRemoteAudio: true });
+    const heard = { sessionId: 4, pcm: Int16Array.from([1]), sampleRate: 16000 };
+    for (const offer of offers) {
+      const callbacks = offer as { onRemoteAudio?: (frame: typeof heard) => void; onSessionClosed?: (sessionId: number) => void };
+      callbacks.onRemoteAudio?.(heard);
+      callbacks.onSessionClosed?.(4);
+    }
+    expect(talk.onRemoteAudio).toHaveBeenCalledTimes(3);
+    expect(talk.onSessionClosed).toHaveBeenCalledTimes(3);
+    resetTalkNotice();
   });
 });

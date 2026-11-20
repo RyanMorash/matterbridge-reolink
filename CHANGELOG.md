@@ -33,6 +33,7 @@ If you like this project, please consider giving it a star on [GitHub](https://g
 
 ### Added
 
+- [talk]: Forward controller microphone audio to a camera speaker through a dedicated Baichuan talk session when Matterbridge can deliver that audio.
 - Reolink cameras, doorbells, floodlights, and NVR or Home Hub channels as Matter endpoints through `@apocaliss92/nodelink-js`.
 - Motion, person, vehicle, pet, and package occupancy sensors, a siren plug, battery reporting, and pan/tilt on a plain camera.
 - A localhost RTSP proxy per channel for Matterbridge WebRTC and snapshots. ffmpeg must be on `PATH`.

@@ -3,7 +3,7 @@
  * @description Login to one Reolink host and expose its channels.
  * @author RyanMorash
  * @created 2026-11-19
- * @version 1.0.0
+ * @version 1.1.6
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -28,14 +28,16 @@ import type { AnsiLogger } from 'matterbridge/logger';
 import { readBatteryPercent, toBatChargeLevel, toBatPercentRemaining } from './battery.js';
 import { type ChannelSummary, selectChannels } from './channels.js';
 import type { NormalizedDevice } from './config.js';
-import { createChannelDevices } from './createDevices.js';
+import { createChannelDevices, liveViewOffer } from './createDevices.js';
 import { actionForEvent, primaryKind, sensorKinds } from './detection.js';
 import { channelLabel, endpointId, limitLabel } from './labels.js';
 import { errorText, type createReolinkLogger } from './logger.js';
+import { type TalkEndpointHooks, matterbridgeAcceptsTalk, noteTalkUnavailable } from './matterTalk.js';
 import { armOccupancy, clearOccupancyTimers, setOccupancy } from './occupancy.js';
 import { movesForTarget, PTZ_HOME, type PtzPosition } from './ptz.js';
 import type { PushService } from './pushService.js';
 import { rtspPort } from './rtsp.js';
+import { TalkBridge, talkSupportFromAbility } from './talk.js';
 
 /** Platform services a host session needs. */
 export interface HostContext {
@@ -105,6 +107,7 @@ interface ChannelRuntime extends RtspSlot {
   light?: MatterbridgeEndpoint;
   siren?: MatterbridgeEndpoint;
   sensors: Map<string, MatterbridgeEndpoint>;
+  talk?: TalkEndpointHooks;
 }
 
 /**
@@ -116,6 +119,12 @@ export class HostSession {
   private readonly occupancyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly pushOff: Array<() => void> = [];
   private readonly restarting = new Set<number>();
+  private readonly talkBridges = new Map<number, TalkBridge>();
+  private readonly republishTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  private readonly republishAttempt = new Map<number, number>();
+  private readonly publishEpoch = new Map<number, number>();
+  private readonly publishing = new Set<number>();
+  private readonly unpublished = new Set<number>();
   private ptzChain: Promise<void> = Promise.resolve();
   private closed = false;
   private subscribed = false;
@@ -181,6 +190,8 @@ export class HostSession {
     this.closed = true;
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.length = 0;
+    for (const timer of this.republishTimers.values()) clearTimeout(timer);
+    this.republishTimers.clear();
     clearOccupancyTimers(this.occupancyTimers);
     for (const off of this.pushOff) off();
     this.pushOff.length = 0;
@@ -193,6 +204,8 @@ export class HostSession {
       this.subscribed = false;
     }
     for (const runtime of this.channels.values()) await this.stopRtsp(runtime);
+    for (const bridge of this.talkBridges.values()) await bridge.shutdown();
+    this.talkBridges.clear();
     await this.safeClose();
   }
 
@@ -243,11 +256,13 @@ export class HostSession {
     if (!this.context.validateDevice([facts.name, facts.serial])) return;
     const slot: RtspSlot = { channel: summary.channel };
     const rtspUrl = await this.startRtsp(slot);
-    const devices = createChannelDevices({ ...facts, rtspUrl, channel: summary.channel });
+    const cameraId = endpointId(facts.serial, summary.channel);
+    const talk = await this.talkFor(summary.channel, cameraId, rtspUrl);
+    const devices = createChannelDevices({ ...facts, rtspUrl, channel: summary.channel, ...(talk === undefined ? {} : { talk }) });
     const runtime: ChannelRuntime = {
       ...slot,
       name: facts.name,
-      cameraId: endpointId(facts.serial, summary.channel),
+      cameraId,
       hasBattery: facts.hasBattery,
       position: PTZ_HOME,
       primary: devices.primary,
@@ -255,11 +270,13 @@ export class HostSession {
       ...(devices.doorbell === undefined ? {} : { doorbell: devices.doorbell }),
       ...(devices.light === undefined ? {} : { light: devices.light }),
       ...(devices.siren === undefined ? {} : { siren: devices.siren }),
+      ...(talk === undefined ? {} : { talk }),
     };
     for (const [sensor, endpoint] of devices.sensors) runtime.sensors.set(sensor, endpoint);
     this.wireControls(runtime, facts.ptz);
     await this.registerAll(runtime, facts.kind);
     this.channels.set(summary.channel, runtime);
+    if (runtime.rtsp === undefined && runtime.talk !== undefined) this.scheduleRestart(summary.channel);
     this.armPush(runtime);
     if (facts.hasBattery) {
       await this.publishBattery(runtime);
@@ -364,6 +381,57 @@ export class HostSession {
     } catch (error) {
       this.context.log.debug(`Accessory state failed for ${this.device.host}: ${errorText(error)}`);
       return false;
+    }
+  }
+
+  /**
+   * Build speaker callbacks when this channel can talk and Matterbridge can play the audio.
+   *
+   * @param {number} channel Zero-based channel
+   * @param {string} deviceId Stable endpoint id passed to the talk socket
+   * @param {string | undefined} rtspUrl Local RTSP URL, absent when the proxy did not start
+   * @returns {Promise<TalkEndpointHooks | undefined>} Hooks for the camera, or undefined when talk stays off
+   */
+  private async talkFor(channel: number, deviceId: string, rtspUrl: string | undefined): Promise<TalkEndpointHooks | undefined> {
+    const support = await this.readTalkSupport(channel);
+    if (support === undefined) return undefined;
+    if (!matterbridgeAcceptsTalk()) {
+      noteTalkUnavailable(this.context.log);
+      return undefined;
+    }
+    const bridge = new TalkBridge(
+      channel,
+      deviceId,
+      async (talkChannel, options) => this.api.createDedicatedTalkSession(talkChannel, options),
+      this.context.log,
+      this.context.reolinkLogger,
+    );
+    bridge.setStreamReady(rtspUrl !== undefined);
+    if (rtspUrl === undefined) this.context.log.debug(`Talk skipped for ${this.device.host} channel ${channel}: the RTSP proxy is not running`);
+    this.talkBridges.set(channel, bridge);
+    return {
+      twoWayTalkSupport: support,
+      onRemoteAudio: (frame) => {
+        bridge.onRemoteAudio(frame);
+      },
+      onSessionClosed: (sessionId) => {
+        bridge.onSessionClosed(sessionId);
+      },
+    };
+  }
+
+  /**
+   * Read whether the channel can send ADPCM, and which duplex mode it offers.
+   *
+   * @param {number} channel Zero-based channel
+   * @returns {Promise<ReturnType<typeof talkSupportFromAbility>>} Duplex mode, or undefined when talk is unavailable
+   */
+  private async readTalkSupport(channel: number): Promise<ReturnType<typeof talkSupportFromAbility>> {
+    try {
+      return talkSupportFromAbility(await this.api.getTalkAbility(channel));
+    } catch (error) {
+      this.context.log.debug(`Talk ability failed for ${this.device.host} channel ${channel}: ${errorText(error)}`);
+      return undefined;
     }
   }
 
@@ -500,6 +568,7 @@ export class HostSession {
     }
     if (action.type === 'online') {
       if (runtime.rtsp === undefined || !runtime.rtsp.isActive()) this.scheduleRestart(runtime.channel);
+      else if (this.unpublished.has(runtime.channel)) void this.publishOffer(runtime, runtime.rtsp.getRtspUrl());
       return;
     }
     if (action.type === 'offline') this.context.log.debug(`${runtime.name} reported offline`);
@@ -707,41 +776,127 @@ export class HostSession {
       this.restarting.delete(channel);
       return;
     }
+    this.publishEpoch.set(channel, this.readEpoch(channel) + 1);
     try {
       await this.stopRtsp(runtime);
       const url = await this.startRtsp(runtime);
-      if (url === undefined) this.context.log.warn(`RTSP proxy did not restart for ${this.device.host} channel ${channel}`);
-      else await this.publishStream(runtime, url);
+      const bridge = this.talkBridges.get(channel);
+      if (url === undefined) {
+        bridge?.setStreamReady(false);
+        this.unpublished.delete(channel);
+        this.republishAttempt.delete(channel);
+        this.cancelRepublish(channel);
+        this.context.log.warn(`RTSP proxy did not restart for ${this.device.host} channel ${channel}`);
+      } else await this.publishOffer(runtime, url);
     } finally {
       this.restarting.delete(channel);
     }
   }
 
   /**
-   * Point Matter live view and snapshots at a replacement RTSP proxy.
-   *
-   * Composed cameras keep the WebRTC cluster on the Camera child. An endpoint that is not commissioned yet rejects
-   * the state update; the next restart tries again.
+   * Publish a proxy URL, and try again while that proxy stays up if the camera rejects the update.
    *
    * @param {ChannelRuntime} runtime Channel whose stream changed
    * @param {string} url Local RTSP url
    * @returns {Promise<void>} Resolves when the update has been attempted
    */
-  private async publishStream(runtime: ChannelRuntime, url: string): Promise<void> {
+  private async publishOffer(runtime: ChannelRuntime, url: string): Promise<void> {
+    const channel = runtime.channel;
+    if (this.publishing.has(channel)) return;
+    this.publishing.add(channel);
+    const epoch = this.readEpoch(channel);
+    let replaced = false;
+    try {
+      const published = await this.publishStream(runtime, url);
+      if (this.closed) return;
+      if (this.readEpoch(channel) !== epoch) {
+        replaced = true;
+        return;
+      }
+      this.talkBridges.get(channel)?.setStreamReady(published);
+      if (published) {
+        this.unpublished.delete(channel);
+        this.republishAttempt.delete(channel);
+        this.cancelRepublish(channel);
+        return;
+      }
+      this.unpublished.add(channel);
+      this.scheduleRepublish(runtime);
+    } finally {
+      this.publishing.delete(channel);
+      const current = this.channels.get(channel);
+      if (replaced && current?.rtsp !== undefined && current.rtsp.isActive()) void this.publishOffer(current, current.rtsp.getRtspUrl());
+    }
+  }
+
+  /**
+   * Try the rejected stream update again without restarting a proxy that is still running.
+   *
+   * The first rejection is logged by {@link publishStream}. Later tries wait longer, up to 30 seconds, and stay quiet.
+   *
+   * @param {ChannelRuntime} runtime Channel whose offer was rejected
+   * @returns {void}
+   */
+  private scheduleRepublish(runtime: ChannelRuntime): void {
+    if (this.closed || this.republishTimers.has(runtime.channel)) return;
+    const attempt = this.republishAttempt.get(runtime.channel) ?? 0;
+    this.republishAttempt.set(runtime.channel, attempt + 1);
+    const base = Math.max(this.context.restartDelayMs, 0);
+    const timer = setTimeout(
+      () => {
+        this.republishTimers.delete(runtime.channel);
+        const current = this.channels.get(runtime.channel);
+        if (current?.rtsp === undefined || !current.rtsp.isActive()) return;
+        void this.publishOffer(current, current.rtsp.getRtspUrl());
+      },
+      Math.min(base * 2 ** attempt, 30_000),
+    );
+    this.republishTimers.set(runtime.channel, timer);
+  }
+
+  /**
+   * Read the publish generation for one channel.
+   *
+   * @param {number} channel Channel to read
+   * @returns {number} Generation, or 0 before the first restart
+   */
+  private readEpoch(channel: number): number {
+    return this.publishEpoch.get(channel) ?? 0;
+  }
+
+  /**
+   * Stop a pending republish so a later success is not overwritten.
+   *
+   * @param {number} channel Channel whose retry should stop
+   * @returns {void}
+   */
+  private cancelRepublish(channel: number): void {
+    const timer = this.republishTimers.get(channel);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.republishTimers.delete(channel);
+  }
+
+  /**
+   * Point Matter live view and snapshots at a replacement RTSP proxy.
+   *
+   * Composed cameras keep the WebRTC cluster on the Camera child. An endpoint that is not commissioned yet rejects
+   * the state update. A later attempt publishes the same proxy again.
+   *
+   * @param {ChannelRuntime} runtime Channel whose stream changed
+   * @param {string} url Local RTSP url
+   * @returns {Promise<boolean>} True when the camera accepted the new offer
+   */
+  private async publishStream(runtime: ChannelRuntime, url: string): Promise<boolean> {
     const endpoint = runtime.primary.getChildEndpointById('Camera') ?? runtime.primary;
     try {
-      await endpoint.setStateOf('webRtcTransportProvider', {
-        weriftOfferOptions: {
-          offerVideo: true,
-          offerAudio: true,
-          videoSource: 'rtsp',
-          audioSource: 'rtsp',
-          videoSourceDevice: url,
-          audioSourceDevice: url,
-        },
-      });
+      await endpoint.setStateOf('webRtcTransportProvider', { weriftOfferOptions: liveViewOffer(url, runtime.talk) });
+      return true;
     } catch (error) {
-      this.context.log.warn(`Stream source was not updated for ${this.device.host} channel ${runtime.channel}: ${errorText(error)}`);
+      const detail = `Stream source was not updated for ${this.device.host} channel ${runtime.channel}: ${errorText(error)}`;
+      if (this.unpublished.has(runtime.channel)) this.context.log.debug(detail);
+      else this.context.log.warn(detail);
+      return false;
     }
   }
 
