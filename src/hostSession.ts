@@ -3,7 +3,7 @@
  * @description Login to one Reolink host and expose its channels.
  * @author RyanMorash
  * @created 2026-11-19
- * @version 1.1.3
+ * @version 1.1.4
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -782,6 +782,7 @@ export class HostSession {
         bridge?.setStreamReady(false);
         this.unpublished.delete(channel);
         this.republishAttempt.delete(channel);
+        this.cancelRepublish(channel);
         this.context.log.warn(`RTSP proxy did not restart for ${this.device.host} channel ${channel}`);
       } else await this.publishOffer(runtime, url);
     } finally {
@@ -803,6 +804,7 @@ export class HostSession {
     if (published) {
       this.unpublished.delete(runtime.channel);
       this.republishAttempt.delete(runtime.channel);
+      this.cancelRepublish(runtime.channel);
       return;
     }
     this.unpublished.add(runtime.channel);
@@ -832,6 +834,19 @@ export class HostSession {
       Math.min(base * 2 ** attempt, 30_000),
     );
     this.republishTimers.set(runtime.channel, timer);
+  }
+
+  /**
+   * Stop a pending republish so a later success is not overwritten.
+   *
+   * @param {number} channel Channel whose retry should stop
+   * @returns {void}
+   */
+  private cancelRepublish(channel: number): void {
+    const timer = this.republishTimers.get(channel);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.republishTimers.delete(channel);
   }
 
   /**

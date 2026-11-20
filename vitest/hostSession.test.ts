@@ -822,6 +822,37 @@ describe('HostSession', () => {
     expect(streamUpdates()).toBe(settled);
     await created.session.shutdown();
     setState.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('drops a pending republish after the stream is accepted', async () => {
+    setMatterbridgeTalkSupport(true);
+    const created = await open(device(), { restartDelayMs: 1000, batteryPollSeconds: 0 });
+    created.api.getTalkAbility.mockResolvedValue({
+      duplexList: ['full'],
+      audioStreamModeList: [],
+      audioConfigList: [{ audioType: 'adpcm', sampleRate: 16000, samplePrecision: 16, lengthPerEncoder: 1024, soundTrack: 'mono' }],
+    });
+    await created.session.start();
+    vi.useFakeTimers();
+    let rejectUpdate = true;
+    const setState = vi.spyOn(MatterbridgeEndpoint.prototype, 'setStateOf').mockImplementation(async () => {
+      if (rejectUpdate) throw new Error('inactive');
+    });
+    harness.servers[0]?.emit('close');
+    await vi.advanceTimersByTimeAsync(1000);
+    rejectUpdate = false;
+    created.api.emit({ type: 'online', channel: 0, timestamp: 2 });
+    await vi.advanceTimersByTimeAsync(0);
+    const streamUpdates = (): number => setState.mock.calls.filter((call) => call[0] === 'webRtcTransportProvider').length;
+    const accepted = streamUpdates();
+    expect(accepted).toBeGreaterThan(1);
+    rejectUpdate = true;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(streamUpdates()).toBe(accepted);
+    await created.session.shutdown();
+    setState.mockRestore();
+    vi.useRealTimers();
   });
 
   it('ignores a stream update that finishes after shutdown', async () => {
