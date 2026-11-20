@@ -3,7 +3,7 @@
  * @description Login to one Reolink host and expose its channels.
  * @author RyanMorash
  * @created 2026-11-19
- * @version 1.1.2
+ * @version 1.1.3
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -120,7 +120,8 @@ export class HostSession {
   private readonly pushOff: Array<() => void> = [];
   private readonly restarting = new Set<number>();
   private readonly talkBridges = new Map<number, TalkBridge>();
-  private readonly republishing = new Set<number>();
+  private readonly republishTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  private readonly republishAttempt = new Map<number, number>();
   private readonly unpublished = new Set<number>();
   private ptzChain: Promise<void> = Promise.resolve();
   private closed = false;
@@ -187,6 +188,8 @@ export class HostSession {
     this.closed = true;
     for (const timer of this.timers) clearTimeout(timer);
     this.timers.length = 0;
+    for (const timer of this.republishTimers.values()) clearTimeout(timer);
+    this.republishTimers.clear();
     clearOccupancyTimers(this.occupancyTimers);
     for (const off of this.pushOff) off();
     this.pushOff.length = 0;
@@ -778,6 +781,7 @@ export class HostSession {
       if (url === undefined) {
         bridge?.setStreamReady(false);
         this.unpublished.delete(channel);
+        this.republishAttempt.delete(channel);
         this.context.log.warn(`RTSP proxy did not restart for ${this.device.host} channel ${channel}`);
       } else await this.publishOffer(runtime, url);
     } finally {
@@ -798,6 +802,7 @@ export class HostSession {
     this.talkBridges.get(runtime.channel)?.setStreamReady(published);
     if (published) {
       this.unpublished.delete(runtime.channel);
+      this.republishAttempt.delete(runtime.channel);
       return;
     }
     this.unpublished.add(runtime.channel);
@@ -807,23 +812,26 @@ export class HostSession {
   /**
    * Try the rejected stream update again without restarting a proxy that is still running.
    *
+   * The first rejection is logged by {@link publishStream}. Later tries wait longer, up to 30 seconds, and stay quiet.
+   *
    * @param {ChannelRuntime} runtime Channel whose offer was rejected
    * @returns {void}
    */
   private scheduleRepublish(runtime: ChannelRuntime): void {
-    if (this.closed || this.republishing.has(runtime.channel)) return;
-    this.republishing.add(runtime.channel);
-    this.timers.push(
-      setTimeout(
-        () => {
-          this.republishing.delete(runtime.channel);
-          const current = this.channels.get(runtime.channel);
-          if (current?.rtsp === undefined || !current.rtsp.isActive()) return;
-          void this.publishOffer(current, current.rtsp.getRtspUrl());
-        },
-        Math.max(this.context.restartDelayMs, 0),
-      ),
+    if (this.closed || this.republishTimers.has(runtime.channel)) return;
+    const attempt = this.republishAttempt.get(runtime.channel) ?? 0;
+    this.republishAttempt.set(runtime.channel, attempt + 1);
+    const base = Math.max(this.context.restartDelayMs, 0);
+    const timer = setTimeout(
+      () => {
+        this.republishTimers.delete(runtime.channel);
+        const current = this.channels.get(runtime.channel);
+        if (current?.rtsp === undefined || !current.rtsp.isActive()) return;
+        void this.publishOffer(current, current.rtsp.getRtspUrl());
+      },
+      Math.min(base * 2 ** attempt, 30_000),
     );
+    this.republishTimers.set(runtime.channel, timer);
   }
 
   /**
@@ -842,7 +850,9 @@ export class HostSession {
       await endpoint.setStateOf('webRtcTransportProvider', { weriftOfferOptions: liveViewOffer(url, runtime.talk) });
       return true;
     } catch (error) {
-      this.context.log.warn(`Stream source was not updated for ${this.device.host} channel ${runtime.channel}: ${errorText(error)}`);
+      const detail = `Stream source was not updated for ${this.device.host} channel ${runtime.channel}: ${errorText(error)}`;
+      if (this.unpublished.has(runtime.channel)) this.context.log.debug(detail);
+      else this.context.log.warn(detail);
       return false;
     }
   }
