@@ -3,7 +3,7 @@
  * @description Map Reolink talk ability and forward controller PCM to a dedicated talk session.
  * @author RyanMorash
  * @created 2026-11-20
- * @version 1.0.0
+ * @version 1.1.0
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -119,6 +119,7 @@ export function isRemoteAudioFrame(frame: RemoteAudioFrame): boolean {
  */
 export class TalkBridge {
   private generation = 0;
+  private streamReady = true;
   private activeSessionId: number | undefined;
   private failedSessionId: number | undefined;
   private session: TalkSession | undefined;
@@ -149,13 +150,23 @@ export class TalkBridge {
   ) {}
 
   /**
+   * Allow or refuse a new talk socket. The host turns this off while the RTSP proxy is down.
+   *
+   * @param {boolean} ready True when live view can accept a talker
+   * @returns {void}
+   */
+  setStreamReady(ready: boolean): void {
+    this.streamReady = ready;
+  }
+
+  /**
    * Queue controller audio. A second WebRTC session is ignored until the first one closes.
    *
    * @param {RemoteAudioFrame} frame Decoded microphone audio
    * @returns {void}
    */
   onRemoteAudio(frame: RemoteAudioFrame): void {
-    if (this.closed || !isRemoteAudioFrame(frame) || this.failedSessionId === frame.sessionId) return;
+    if (this.closed || !this.streamReady || !isRemoteAudioFrame(frame) || this.failedSessionId === frame.sessionId) return;
     if (this.activeSessionId !== undefined && this.activeSessionId !== frame.sessionId) {
       this.logSecondTalker();
       return;
@@ -172,7 +183,8 @@ export class TalkBridge {
    * @returns {void}
    */
   onSessionClosed(sessionId: number): void {
-    if (sessionId !== this.activeSessionId && sessionId !== this.failedSessionId) return;
+    if (sessionId === this.failedSessionId) this.failedSessionId = undefined;
+    if (sessionId !== this.activeSessionId) return;
     void this.release();
   }
 
@@ -356,10 +368,17 @@ export class TalkBridge {
    * @returns {Promise<void>} Resolves when the stop has been attempted
    */
   private async release(): Promise<void> {
-    this.releasing ??= this.finishRelease().finally(() => {
+    const inflight = this.releasing;
+    if (inflight !== undefined) {
+      await inflight;
+      if (this.session !== undefined || this.activeSessionId !== undefined) await this.release();
+      return;
+    }
+    const job = this.finishRelease().finally(() => {
       this.releasing = undefined;
     });
-    await this.releasing;
+    this.releasing = job;
+    await job;
   }
 
   /**

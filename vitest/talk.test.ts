@@ -285,4 +285,53 @@ describe('TalkBridge', () => {
     talk.onRemoteAudio(frame(1, [1, 2, 3]));
     expect(opened.sendAudio).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps a later talker when the failed session closes', async () => {
+    const open = vi.fn<TalkOpener>();
+    open.mockRejectedValueOnce(new Error('busy'));
+    const opened = session();
+    open.mockResolvedValueOnce(opened);
+    const talk = bridge(open);
+    talk.onRemoteAudio(frame(1, [1, 2, 3]));
+    await vi.waitFor(() => expect(platform.error).toHaveBeenCalledWith(expect.stringContaining('Talk session failed')));
+    talk.onRemoteAudio(frame(2, [4, 5, 6]));
+    await vi.waitFor(() => expect(opened.sendAudio).toHaveBeenCalledTimes(1));
+    talk.onSessionClosed(1);
+    expect(opened.stop).not.toHaveBeenCalled();
+    talk.onRemoteAudio(frame(2, [7, 8, 9]));
+    await vi.waitFor(() => expect(opened.sendAudio).toHaveBeenCalledTimes(2));
+    talk.onSessionClosed(2);
+    await vi.waitFor(() => expect(opened.stop).toHaveBeenCalledTimes(1));
+  });
+
+  it('stops a talker that starts while the previous socket is still closing', async () => {
+    const first = session();
+    const stopGate = deferred<boolean>();
+    first.stop.mockReturnValueOnce(stopGate.promise);
+    const second = session();
+    const open = vi.fn<TalkOpener>();
+    open.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    const talk = bridge(open);
+    talk.onRemoteAudio(frame(1, [1, 2, 3]));
+    await vi.waitFor(() => expect(first.sendAudio).toHaveBeenCalled());
+    talk.onSessionClosed(1);
+    await vi.waitFor(() => expect(first.stop).toHaveBeenCalled());
+    talk.onRemoteAudio(frame(2, [4, 5, 6]));
+    await vi.waitFor(() => expect(second.sendAudio).toHaveBeenCalled());
+    talk.onSessionClosed(2);
+    stopGate.resolve(true);
+    await vi.waitFor(() => expect(second.stop).toHaveBeenCalled());
+  });
+
+  it('drops audio while the RTSP proxy is down', async () => {
+    const opened = session();
+    const open = vi.fn(async () => opened);
+    const talk = bridge(open);
+    talk.setStreamReady(false);
+    talk.onRemoteAudio(frame(1, [1, 2, 3]));
+    expect(open).not.toHaveBeenCalled();
+    talk.setStreamReady(true);
+    talk.onRemoteAudio(frame(1, [1, 2, 3]));
+    await vi.waitFor(() => expect(opened.sendAudio).toHaveBeenCalled());
+  });
 });

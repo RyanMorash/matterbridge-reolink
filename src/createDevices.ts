@@ -3,7 +3,7 @@
  * @description Build Matter endpoints for one Reolink channel.
  * @author RyanMorash
  * @created 2026-11-19
- * @version 1.1.0
+ * @version 1.1.1
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -85,13 +85,17 @@ export interface ChannelDeviceInput {
 /**
  * WebRTC source options for a localhost RTSP proxy.
  *
- * @param {string | undefined} rtspUrl Local proxy URL
- * @returns {object | undefined} werift options, or undefined when there is no stream
+ * @param {string} rtspUrl Local proxy URL
+ * @returns {object} werift options for that proxy
  */
-function streamOptions(
-  rtspUrl: string | undefined,
-): { offerVideo: true; offerAudio: true; videoSource: 'rtsp'; audioSource: 'rtsp'; videoSourceDevice: string; audioSourceDevice: string } | undefined {
-  if (rtspUrl === undefined) return undefined;
+function streamOptions(rtspUrl: string): {
+  offerVideo: true;
+  offerAudio: true;
+  videoSource: 'rtsp';
+  audioSource: 'rtsp';
+  videoSourceDevice: string;
+  audioSourceDevice: string;
+} {
   return {
     offerVideo: true,
     offerAudio: true,
@@ -100,6 +104,17 @@ function streamOptions(
     videoSourceDevice: rtspUrl,
     audioSourceDevice: rtspUrl,
   };
+}
+
+/**
+ * Build the WebRTC offer for a proxy URL, including talk callbacks when this channel can talk.
+ *
+ * @param {string} rtspUrl Local proxy URL
+ * @param {TalkEndpointHooks | undefined} talk Talk callbacks. Omitted when the channel cannot talk
+ * @returns {ReturnType<typeof streamOptions>} Offer stored on the camera
+ */
+export function liveViewOffer(rtspUrl: string, talk?: TalkEndpointHooks): ReturnType<typeof streamOptions> {
+  return attachTalk(streamOptions(rtspUrl), talk);
 }
 
 /**
@@ -131,8 +146,7 @@ function identify(endpoint: MatterbridgeEndpoint, input: ChannelDeviceInput, nam
  */
 export function createChannelDevices(input: ChannelDeviceInput): ChannelDevices {
   const powerSourceType = input.hasBattery ? 'Rechargeable' : 'Wired';
-  const rtspOffer = streamOptions(input.rtspUrl);
-  const weriftOfferOptions = rtspOffer === undefined ? undefined : attachTalk(rtspOffer, input.talk);
+  const weriftOfferOptions = input.rtspUrl === undefined ? undefined : liveViewOffer(input.rtspUrl, input.talk);
   const id = endpointId(input.serial, input.channel);
   const primary = stamp(createPrimary(input, id, powerSourceType, weriftOfferOptions), input);
   const doorbell = input.kind === 'doorbell' ? primary.getChildEndpointById('Doorbell') : undefined;
@@ -169,16 +183,16 @@ function stamp(endpoint: MatterbridgeEndpoint, input: ChannelDeviceInput): Matte
  * @param {ChannelDeviceInput} input Channel identity
  * @param {string} id Stable endpoint id
  * @param {'Rechargeable' | 'Wired'} powerSourceType Power source feature
- * @param {ReturnType<typeof streamOptions>} weriftOfferOptions Local RTSP source
+ * @param {ReturnType<typeof streamOptions> | undefined} weriftOfferOptions Local RTSP source
  * @returns {MatterbridgeEndpoint} Camera, video doorbell, or floodlight camera
  */
 function createPrimary(
   input: ChannelDeviceInput,
   id: string,
   powerSourceType: 'Rechargeable' | 'Wired',
-  weriftOfferOptions: ReturnType<typeof streamOptions>,
+  weriftOfferOptions: ReturnType<typeof streamOptions> | undefined,
 ): MatterbridgeEndpoint {
-  const talkFields = cameraTalkFields(weriftOfferOptions === undefined ? undefined : input.talk);
+  const talkFields = cameraTalkFields(input.talk);
   if (input.kind === 'doorbell') {
     const cameraOptions: NonNullable<NonNullable<ConstructorParameters<typeof VideoDoorbell>[2]>['cameraOptions']> = {};
     if (weriftOfferOptions !== undefined) cameraOptions.weriftOfferOptions = weriftOfferOptions;

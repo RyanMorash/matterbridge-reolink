@@ -3,7 +3,7 @@
  * @description Login to one Reolink host and expose its channels.
  * @author RyanMorash
  * @created 2026-11-19
- * @version 1.1.0
+ * @version 1.1.1
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -28,7 +28,7 @@ import type { AnsiLogger } from 'matterbridge/logger';
 import { readBatteryPercent, toBatChargeLevel, toBatPercentRemaining } from './battery.js';
 import { type ChannelSummary, selectChannels } from './channels.js';
 import type { NormalizedDevice } from './config.js';
-import { createChannelDevices } from './createDevices.js';
+import { createChannelDevices, liveViewOffer } from './createDevices.js';
 import { actionForEvent, primaryKind, sensorKinds } from './detection.js';
 import { channelLabel, endpointId, limitLabel } from './labels.js';
 import { errorText, type createReolinkLogger } from './logger.js';
@@ -107,6 +107,7 @@ interface ChannelRuntime extends RtspSlot {
   light?: MatterbridgeEndpoint;
   siren?: MatterbridgeEndpoint;
   sensors: Map<string, MatterbridgeEndpoint>;
+  talk?: TalkEndpointHooks;
 }
 
 /**
@@ -262,11 +263,13 @@ export class HostSession {
       ...(devices.doorbell === undefined ? {} : { doorbell: devices.doorbell }),
       ...(devices.light === undefined ? {} : { light: devices.light }),
       ...(devices.siren === undefined ? {} : { siren: devices.siren }),
+      ...(talk === undefined ? {} : { talk }),
     };
     for (const [sensor, endpoint] of devices.sensors) runtime.sensors.set(sensor, endpoint);
     this.wireControls(runtime, facts.ptz);
     await this.registerAll(runtime, facts.kind);
     this.channels.set(summary.channel, runtime);
+    if (runtime.rtsp === undefined && runtime.talk !== undefined) this.scheduleRestart(summary.channel);
     this.armPush(runtime);
     if (facts.hasBattery) {
       await this.publishBattery(runtime);
@@ -389,10 +392,6 @@ export class HostSession {
       noteTalkUnavailable(this.context.log);
       return undefined;
     }
-    if (rtspUrl === undefined) {
-      this.context.log.debug(`Talk skipped for ${this.device.host} channel ${channel}: the RTSP proxy is not running`);
-      return undefined;
-    }
     const bridge = new TalkBridge(
       channel,
       deviceId,
@@ -400,6 +399,8 @@ export class HostSession {
       this.context.log,
       this.context.reolinkLogger,
     );
+    bridge.setStreamReady(rtspUrl !== undefined);
+    if (rtspUrl === undefined) this.context.log.debug(`Talk skipped for ${this.device.host} channel ${channel}: the RTSP proxy is not running`);
     this.talkBridges.set(channel, bridge);
     return {
       twoWayTalkSupport: support,
@@ -770,8 +771,14 @@ export class HostSession {
     try {
       await this.stopRtsp(runtime);
       const url = await this.startRtsp(runtime);
-      if (url === undefined) this.context.log.warn(`RTSP proxy did not restart for ${this.device.host} channel ${channel}`);
-      else await this.publishStream(runtime, url);
+      const bridge = this.talkBridges.get(channel);
+      if (url === undefined) {
+        bridge?.setStreamReady(false);
+        this.context.log.warn(`RTSP proxy did not restart for ${this.device.host} channel ${channel}`);
+      } else {
+        const published = await this.publishStream(runtime, url);
+        bridge?.setStreamReady(published);
+      }
     } finally {
       this.restarting.delete(channel);
     }
@@ -785,23 +792,16 @@ export class HostSession {
    *
    * @param {ChannelRuntime} runtime Channel whose stream changed
    * @param {string} url Local RTSP url
-   * @returns {Promise<void>} Resolves when the update has been attempted
+   * @returns {Promise<boolean>} True when the camera accepted the new offer
    */
-  private async publishStream(runtime: ChannelRuntime, url: string): Promise<void> {
+  private async publishStream(runtime: ChannelRuntime, url: string): Promise<boolean> {
     const endpoint = runtime.primary.getChildEndpointById('Camera') ?? runtime.primary;
     try {
-      await endpoint.setStateOf('webRtcTransportProvider', {
-        weriftOfferOptions: {
-          offerVideo: true,
-          offerAudio: true,
-          videoSource: 'rtsp',
-          audioSource: 'rtsp',
-          videoSourceDevice: url,
-          audioSourceDevice: url,
-        },
-      });
+      await endpoint.setStateOf('webRtcTransportProvider', { weriftOfferOptions: liveViewOffer(url, runtime.talk) });
+      return true;
     } catch (error) {
       this.context.log.warn(`Stream source was not updated for ${this.device.host} channel ${runtime.channel}: ${errorText(error)}`);
+      return false;
     }
   }
 

@@ -727,6 +727,63 @@ describe('HostSession', () => {
     await offline.session.start();
     expect(offline.ctx.log.debug).toHaveBeenCalledWith(expect.stringContaining('RTSP proxy is not running'));
     expect(offline.api.createDedicatedTalkSession).not.toHaveBeenCalled();
+    await flush();
     await offline.session.shutdown();
+  });
+
+  it('keeps talk callbacks when the RTSP proxy restarts', async () => {
+    setMatterbridgeTalkSupport(true);
+    const created = await create();
+    created.api.getTalkAbility.mockResolvedValue({
+      duplexList: ['full'],
+      audioStreamModeList: [],
+      audioConfigList: [{ audioType: 'adpcm', sampleRate: 16000, samplePrecision: 16, lengthPerEncoder: 1024, soundTrack: 'mono' }],
+    });
+    await created.session.start();
+    const camera = created.ctx.registered[0];
+    if (camera === undefined) throw new Error('camera was not registered');
+    const setState = vi.spyOn(camera, 'setStateOf').mockImplementation(async () => {
+      await Promise.resolve();
+    });
+    harness.servers[0]?.emit('close');
+    await flush();
+    const restarted = setState.mock.calls.find((call) => call[0] === 'webRtcTransportProvider');
+    const offer = (restarted?.[1] as { weriftOfferOptions?: { acceptRemoteAudio?: boolean; onRemoteAudio?: (frame: unknown) => void } } | undefined)?.weriftOfferOptions;
+    expect(offer?.acceptRemoteAudio).toBe(true);
+    offer?.onRemoteAudio?.({ sessionId: 4, pcm: Int16Array.from([1, 2, 3]), sampleRate: 16000 });
+    await vi.waitFor(() => expect(created.api.createDedicatedTalkSession).toHaveBeenCalled());
+    await created.session.shutdown();
+  });
+
+  it('attaches talk after the RTSP proxy recovers and stops talk when the update is rejected', async () => {
+    setMatterbridgeTalkSupport(true);
+    harness.setRtsp({ failStart: true });
+    const created = await create();
+    created.api.getTalkAbility.mockResolvedValue({
+      duplexList: ['fd'],
+      audioStreamModeList: [],
+      audioConfigList: [{ audioType: 'adpcm', sampleRate: 16000, samplePrecision: 16, lengthPerEncoder: 1024, soundTrack: 'mono' }],
+    });
+    const setState = vi.spyOn(MatterbridgeEndpoint.prototype, 'setStateOf').mockImplementation(async () => {
+      await Promise.resolve();
+    });
+    await created.session.start();
+    await flush();
+    const recovered = setState.mock.calls.find((call) => call[0] === 'webRtcTransportProvider');
+    const offer = (recovered?.[1] as { weriftOfferOptions?: { onRemoteAudio?: (frame: unknown) => void; onSessionClosed?: (id: number) => void } } | undefined)?.weriftOfferOptions;
+    offer?.onRemoteAudio?.({ sessionId: 5, pcm: Int16Array.from([1, 2, 3]), sampleRate: 16000 });
+    await vi.waitFor(() => expect(created.api.createDedicatedTalkSession).toHaveBeenCalled());
+    const talkSession = await created.api.createDedicatedTalkSession.mock.results[0]?.value;
+    offer?.onSessionClosed?.(5);
+    await vi.waitFor(() => expect(talkSession.stop).toHaveBeenCalled());
+
+    setState.mockRejectedValueOnce(new Error('inactive'));
+    harness.servers.at(-1)?.emit('close');
+    await flush();
+    expect(created.ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining('Stream source was not updated'));
+    offer?.onRemoteAudio?.({ sessionId: 6, pcm: Int16Array.from([1, 2, 3]), sampleRate: 16000 });
+    expect(created.api.createDedicatedTalkSession).toHaveBeenCalledTimes(1);
+    await created.session.shutdown();
+    setState.mockRestore();
   });
 });
