@@ -780,10 +780,59 @@ describe('HostSession', () => {
     setState.mockRejectedValueOnce(new Error('inactive'));
     harness.servers.at(-1)?.emit('close');
     await flush();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(created.ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining('Stream source was not updated'));
-    offer?.onRemoteAudio?.({ sessionId: 6, pcm: Int16Array.from([1, 2, 3]), sampleRate: 16000 });
-    expect(created.api.createDedicatedTalkSession).toHaveBeenCalledTimes(1);
+    const republished = setState.mock.calls.findLast((call) => call[0] === 'webRtcTransportProvider');
+    const nextOffer = (republished?.[1] as { weriftOfferOptions?: { onRemoteAudio?: (frame: unknown) => void } } | undefined)?.weriftOfferOptions;
+    nextOffer?.onRemoteAudio?.({ sessionId: 6, pcm: Int16Array.from([1, 2, 3]), sampleRate: 16000 });
+    await vi.waitFor(() => expect(created.api.createDedicatedTalkSession).toHaveBeenCalledTimes(2));
     await created.session.shutdown();
+    setState.mockRestore();
+  });
+
+  it('retries a rejected stream while the proxy stays up and skips a stale retry', async () => {
+    setMatterbridgeTalkSupport(true);
+    const created = await open(device(), { restartDelayMs: 1000, batteryPollSeconds: 0 });
+    created.api.getTalkAbility.mockResolvedValue({
+      duplexList: ['full'],
+      audioStreamModeList: [],
+      audioConfigList: [{ audioType: 'adpcm', sampleRate: 16000, samplePrecision: 16, lengthPerEncoder: 1024, soundTrack: 'mono' }],
+    });
+    await created.session.start();
+    vi.useFakeTimers();
+    const setState = vi.spyOn(MatterbridgeEndpoint.prototype, 'setStateOf').mockRejectedValue(new Error('inactive'));
+    harness.servers[0]?.emit('close');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(created.ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining('Stream source was not updated'));
+    created.api.emit({ type: 'online', channel: 0, timestamp: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setState.mock.calls.filter((call) => call[0] === 'webRtcTransportProvider').length).toBeGreaterThan(1);
+    harness.servers.at(-1)?.isActive.mockReturnValue(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    const updates = setState.mock.calls.filter((call) => call[0] === 'webRtcTransportProvider').length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(setState.mock.calls.filter((call) => call[0] === 'webRtcTransportProvider').length).toBe(updates);
+    await created.session.shutdown();
+    setState.mockRestore();
+  });
+
+  it('ignores a stream update that finishes after shutdown', async () => {
+    const created = await open();
+    let release: () => void = () => {};
+    let waited = false;
+    const setState = vi.spyOn(created.ctx.registered[0] ?? MatterbridgeEndpoint.prototype, 'setStateOf').mockImplementation(async (cluster: string) => {
+      if (cluster !== 'webRtcTransportProvider') return;
+      waited = true;
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    harness.servers[0]?.emit('close');
+    await flush();
+    expect(waited).toBe(true);
+    const stopping = created.session.shutdown();
+    release();
+    await stopping;
     setState.mockRestore();
   });
 });

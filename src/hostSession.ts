@@ -3,7 +3,7 @@
  * @description Login to one Reolink host and expose its channels.
  * @author RyanMorash
  * @created 2026-11-19
- * @version 1.1.1
+ * @version 1.1.2
  * @license Apache-2.0
  *
  * Copyright 2026 RyanMorash.
@@ -120,6 +120,8 @@ export class HostSession {
   private readonly pushOff: Array<() => void> = [];
   private readonly restarting = new Set<number>();
   private readonly talkBridges = new Map<number, TalkBridge>();
+  private readonly republishing = new Set<number>();
+  private readonly unpublished = new Set<number>();
   private ptzChain: Promise<void> = Promise.resolve();
   private closed = false;
   private subscribed = false;
@@ -561,6 +563,7 @@ export class HostSession {
     }
     if (action.type === 'online') {
       if (runtime.rtsp === undefined || !runtime.rtsp.isActive()) this.scheduleRestart(runtime.channel);
+      else if (this.unpublished.has(runtime.channel)) void this.publishOffer(runtime, runtime.rtsp.getRtspUrl());
       return;
     }
     if (action.type === 'offline') this.context.log.debug(`${runtime.name} reported offline`);
@@ -774,21 +777,60 @@ export class HostSession {
       const bridge = this.talkBridges.get(channel);
       if (url === undefined) {
         bridge?.setStreamReady(false);
+        this.unpublished.delete(channel);
         this.context.log.warn(`RTSP proxy did not restart for ${this.device.host} channel ${channel}`);
-      } else {
-        const published = await this.publishStream(runtime, url);
-        bridge?.setStreamReady(published);
-      }
+      } else await this.publishOffer(runtime, url);
     } finally {
       this.restarting.delete(channel);
     }
   }
 
   /**
+   * Publish a proxy URL, and try again while that proxy stays up if the camera rejects the update.
+   *
+   * @param {ChannelRuntime} runtime Channel whose stream changed
+   * @param {string} url Local RTSP url
+   * @returns {Promise<void>} Resolves when the update has been attempted
+   */
+  private async publishOffer(runtime: ChannelRuntime, url: string): Promise<void> {
+    const published = await this.publishStream(runtime, url);
+    if (this.closed) return;
+    this.talkBridges.get(runtime.channel)?.setStreamReady(published);
+    if (published) {
+      this.unpublished.delete(runtime.channel);
+      return;
+    }
+    this.unpublished.add(runtime.channel);
+    this.scheduleRepublish(runtime);
+  }
+
+  /**
+   * Try the rejected stream update again without restarting a proxy that is still running.
+   *
+   * @param {ChannelRuntime} runtime Channel whose offer was rejected
+   * @returns {void}
+   */
+  private scheduleRepublish(runtime: ChannelRuntime): void {
+    if (this.closed || this.republishing.has(runtime.channel)) return;
+    this.republishing.add(runtime.channel);
+    this.timers.push(
+      setTimeout(
+        () => {
+          this.republishing.delete(runtime.channel);
+          const current = this.channels.get(runtime.channel);
+          if (current?.rtsp === undefined || !current.rtsp.isActive()) return;
+          void this.publishOffer(current, current.rtsp.getRtspUrl());
+        },
+        Math.max(this.context.restartDelayMs, 0),
+      ),
+    );
+  }
+
+  /**
    * Point Matter live view and snapshots at a replacement RTSP proxy.
    *
    * Composed cameras keep the WebRTC cluster on the Camera child. An endpoint that is not commissioned yet rejects
-   * the state update; the next restart tries again.
+   * the state update. A later attempt publishes the same proxy again.
    *
    * @param {ChannelRuntime} runtime Channel whose stream changed
    * @param {string} url Local RTSP url
